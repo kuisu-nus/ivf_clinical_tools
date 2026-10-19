@@ -1,0 +1,22 @@
+{
+  "name": "contacts_get",
+  "description": "根据ID获取联系人详细信息",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "contact_id": {
+        "type": "string",
+        "description": "联系人ID"
+      }
+    },
+    "required": [
+      "contact_id"
+    ]
+  },
+  "backend": {
+    "type": "http",
+    "service": "contacts",
+    "url": "http://127.0.0.1:9103/contacts/get",
+    "method": "POST"
+  }
+}

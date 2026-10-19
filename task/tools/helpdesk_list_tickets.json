@@ -1,0 +1,21 @@
+{
+  "name": "helpdesk_list_tickets",
+  "description": "获取工单列表",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "description": "工单状态筛选 (open/closed/all)",
+        "default": "open"
+      }
+    },
+    "required": []
+  },
+  "backend": {
+    "type": "http",
+    "service": "helpdesk",
+    "url": "http://127.0.0.1:9107/helpdesk/tickets",
+    "method": "POST"
+  }
+}

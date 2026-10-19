@@ -1,0 +1,20 @@
+{
+  "name": "config_list_integrations",
+  "description": "获取所有第三方集成的列表（概览信息）",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "type": "string",
+        "description": "按状态筛选：active, degraded, expired"
+      }
+    },
+    "required": []
+  },
+  "backend": {
+    "type": "http",
+    "service": "config",
+    "url": "http://127.0.0.1:9111/config/integrations",
+    "method": "POST"
+  }
+}

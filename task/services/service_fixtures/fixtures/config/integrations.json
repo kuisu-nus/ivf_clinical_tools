@@ -1,0 +1,90 @@
+[
+  {
+    "integration_id": "INT-5108",
+    "name": "巨潮资讯公告抓取",
+    "service": "cninfo_disclosure_api",
+    "status": "degraded",
+    "endpoint": "https://api.cninfo.example.com/v3/disclosures",
+    "api_key": "sk-cninfo-5108-REDACTED",
+    "api_secret": "sec-cninfo-REDACTED",
+    "webhook_url": "https://cms.beijingnews.example.com/hooks/cninfo",
+    "last_verified": "2026-03-24T23:40:00Z",
+    "monthly_calls": 48720,
+    "error_rate": 0.183,
+    "notes": "用于A股公告、内部人减持、重大事项催化剂模块；3月25日凌晨起PDF附件解析间歇性失败。Owner: 数据平台-李雯。"
+  },
+  {
+    "integration_id": "INT-5018",
+    "name": "巨潮资讯公告抓取-旧版",
+    "service": "cninfo_disclosure_api_legacy",
+    "status": "expired",
+    "endpoint": "https://legacy.cninfo.example.com/v1/ann",
+    "api_key": "sk-cninfo-legacy-REDACTED",
+    "last_verified": "2025-12-31T09:20:00Z",
+    "monthly_calls": 0,
+    "error_rate": 1,
+    "notes": "2026-01-15停用，仅历史归档；不要用于当前CMS发布链路。Owner: 资料库-周晨。"
+  },
+  {
+    "integration_id": "INT-6202",
+    "name": "东方财富行情快照",
+    "service": "eastmoney_quote_api",
+    "status": "active",
+    "endpoint": "https://quote.eastmoney.example.com/api/v2/snapshot",
+    "api_key": "sk-eastmoney-6202-REDACTED",
+    "last_verified": "2026-03-25T08:10:00Z",
+    "monthly_calls": 103445,
+    "error_rate": 0.006,
+    "notes": "用于行情、估值分位和板块热度；不提供公告PDF或内部人减持原始披露。Owner: 数据平台-李雯。"
+  },
+  {
+    "integration_id": "INT-6301",
+    "name": "同花顺资金流向",
+    "service": "ths_capital_flow",
+    "status": "active",
+    "endpoint": "https://data.ths.example.com/fundflow",
+    "api_key": "sk-ths-6301-REDACTED",
+    "last_verified": "2026-03-25T07:55:00Z",
+    "monthly_calls": 67890,
+    "error_rate": 0.012,
+    "notes": "用于游资博弈识别模块；昨日供应商限流已解除。Owner: 金融数据组-王璐。"
+  },
+  {
+    "integration_id": "INT-7104",
+    "name": "Wind财务指标同步",
+    "service": "wind_financials",
+    "status": "active",
+    "endpoint": "https://wind.example.com/openapi/financials",
+    "api_key": "sk-wind-7104-REDACTED",
+    "api_secret": "wind-sec-REDACTED",
+    "last_verified": "2026-03-25T06:30:00Z",
+    "monthly_calls": 41200,
+    "error_rate": 0.009,
+    "notes": "用于财务健康度、估值合理性模块；季度财报字段已完成校验。Owner: 金融数据组-王璐。"
+  },
+  {
+    "integration_id": "INT-7205",
+    "name": "交易所公告镜像",
+    "service": "exchange_disclosure_mirror",
+    "status": "active",
+    "endpoint": "https://mirror.sse-szse.example.com/disclosure",
+    "api_key": "sk-exchange-7205-REDACTED",
+    "last_verified": "2026-03-23T16:00:00Z",
+    "monthly_calls": 15980,
+    "error_rate": 0.021,
+    "notes": "备份源，仅覆盖沪深交易所公告摘要，不含全部PDF附件和内部人减持明细。Owner: 资料库-周晨。"
+  },
+  {
+    "integration_id": "INT-8307",
+    "name": "CMS社媒排程",
+    "service": "social_scheduler",
+    "status": "degraded",
+    "endpoint": "https://social.example.com/api/schedule",
+    "api_key": "sk-social-8307-REDACTED",
+    "webhook_url": "https://cms.beijingnews.example.com/hooks/social",
+    "last_verified": "2026-03-25T01:20:00Z",
+    "monthly_calls": 8320,
+    "error_rate": 0.097,
+    "notes": "微博封面图上传偶发失败；不影响正文事实核验或A股数据链路。Owner: 新媒体技术-陈岚。"
+  }
+]

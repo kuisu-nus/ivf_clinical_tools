@@ -1,0 +1,90 @@
+[
+  {
+    "contact_id": "CT-2101",
+    "name": "李雯",
+    "department": "数据平台",
+    "title": "高级数据接口工程师",
+    "email": "liwen@dataplatform.example.com",
+    "phone": "13900012001",
+    "location": "北京",
+    "skills": [
+      "财经数据API",
+      "公告解析",
+      "CMS数据链路"
+    ],
+    "notes": "负责 cninfo_disclosure_api 与 eastmoney_quote_api 的生产接入；工作日紧急工单SLA 2小时内响应。"
+  },
+  {
+    "contact_id": "CT-2102",
+    "name": "李文",
+    "department": "新媒体中心",
+    "title": "社媒运营编辑",
+    "email": "liwen.social@example.com",
+    "phone": "13900012002",
+    "location": "北京",
+    "skills": [
+      "微博运营",
+      "封面图审核"
+    ],
+    "notes": "姓名同音，非数据平台工程师。"
+  },
+  {
+    "contact_id": "CT-2203",
+    "name": "王璐",
+    "department": "金融数据组",
+    "title": "金融数据产品经理",
+    "email": "wanglu@findata.example.com",
+    "phone": "13900012003",
+    "location": "上海",
+    "skills": [
+      "Wind接口",
+      "财务指标口径",
+      "估值模型"
+    ],
+    "notes": "负责Wind财务指标与同花顺资金流向供应商沟通。"
+  },
+  {
+    "contact_id": "CT-2304",
+    "name": "周晨",
+    "department": "资料库",
+    "title": "资料库系统管理员",
+    "email": "zhouchen@archive.example.com",
+    "phone": "13900012004",
+    "location": "北京",
+    "skills": [
+      "历史归档",
+      "交易所公告镜像"
+    ],
+    "notes": "维护旧版巨潮归档和交易所公告镜像；不负责当前CMS主链路。"
+  },
+  {
+    "contact_id": "CT-2405",
+    "name": "陈岚",
+    "department": "新媒体技术",
+    "title": "发布系统工程师",
+    "email": "chenlan@socialtech.example.com",
+    "phone": "13900012005",
+    "location": "北京",
+    "skills": [
+      "社媒排程",
+      "图片上传",
+      "CMS发布"
+    ],
+    "notes": "负责社媒排程工具，不负责财经数据源。"
+  },
+  {
+    "contact_id": "CT-2506",
+    "name": "严梅",
+    "department": "财经调查组",
+    "title": "高级记者",
+    "email": "yanmei@beijingnews.example.com",
+    "phone": "13900012006",
+    "location": "北京",
+    "skills": [
+      "调查报道",
+      "事实核验",
+      "A股专题"
+    ],
+    "notes": "请求方；不要作为技术处理人。"
+  }
+]

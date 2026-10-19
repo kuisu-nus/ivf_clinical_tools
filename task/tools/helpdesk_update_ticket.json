@@ -1,0 +1,37 @@
+{
+  "name": "helpdesk_update_ticket",
+  "description": "更新工单信息",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "ticket_id": {
+        "type": "string",
+        "description": "工单ID"
+      },
+      "priority": {
+        "type": "string",
+        "description": "优先级 (urgent/high/medium/low)"
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "标签列表"
+      },
+      "category": {
+        "type": "string",
+        "description": "分类"
+      }
+    },
+    "required": [
+      "ticket_id"
+    ]
+  },
+  "backend": {
+    "type": "http",
+    "service": "helpdesk",
+    "url": "http://127.0.0.1:9107/helpdesk/tickets/update",
+    "method": "POST"
+  }
+}
