@@ -1,0 +1,27 @@
+{
+  "name": "ivf_predict_outcome",
+  "description": "用去泄露训练集上的逻辑回归（年龄、年龄²、log AMH）预测当前患者本次移植的临床妊娠概率，返回概率、95% 置信区间、年龄与 AMH 各自的作用和模型卡片（交叉验证 AUC、Brier）。不提供 AMH 时只用年龄；输入超出训练数据范围时拒绝预测。模型区分能力有限，作为参考。",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "age": {
+        "type": "number",
+        "description": "当前患者女方年龄（岁）"
+      },
+      "amh": {
+        "type": "number",
+        "description": "当前患者女方 AMH（ng/mL）；未检查可不填"
+      }
+    },
+    "required": [
+      "age"
+    ],
+    "additionalProperties": false
+  },
+  "backend": {
+    "type": "http",
+    "service": "ivf_clinical",
+    "url": "http://127.0.0.1:9201/ivf/predict_outcome",
+    "method": "POST"
+  }
+}

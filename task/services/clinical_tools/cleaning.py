@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-from clinical_tools.common import FEATURE_NAMES, parse_label, parse_value
+from clinical_tools.common import FEATURE_NAMES, assign_folds, parse_label, parse_value
 
 EXPECTED_TRAIN_ROWS = 1132
 # v2 exported this column as "处理前NP"; its meaning is unconfirmed either way.
@@ -54,6 +54,18 @@ class TrainingSet:
     case_ids: list[str]
     matrix: np.ndarray          # rows x FEATURE_NAMES, NaN for missing
     labels: np.ndarray
+
+    def visible(self, exclude_case: str | None = None, k_folds: int = 5) -> tuple["TrainingSet", str]:
+        """Cases a tool may use, and a description of that scope. With a case under
+        evaluation (agentic RL on training cases), its whole fold is hidden."""
+        if exclude_case is None:
+            return self, "全部训练病例"
+        if exclude_case not in self.case_ids:
+            raise ValueError(f"exclude_case {exclude_case} is not a training case")
+        folds = np.array(assign_folds(self.case_ids, self.labels.tolist(), k_folds))
+        keep = folds != folds[self.case_ids.index(exclude_case)]
+        subset = TrainingSet([c for c, k in zip(self.case_ids, keep) if k], self.matrix[keep], self.labels[keep])
+        return subset, f"训练病例中排除当前病例所在的 1/{k_folds}"
 
 
 def clean_matrix(x: np.ndarray) -> tuple[np.ndarray, Counter]:

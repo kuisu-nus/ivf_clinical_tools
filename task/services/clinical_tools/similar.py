@@ -18,7 +18,7 @@ import math
 import numpy as np
 
 from clinical_tools.cleaning import TrainingSet
-from clinical_tools.common import FEATURE_NAMES, assign_folds, wilson_interval
+from clinical_tools.common import FEATURE_NAMES, InputError, number_argument, wilson_interval
 
 MIN_COHORT = 15
 AGE_WINDOW = (1, 3)              # allowed half-widths in years; default the lower bound
@@ -30,47 +30,23 @@ OUTCOME = {1: "临床妊娠", 0: "未妊娠"}
 AGE, AMH = FEATURE_NAMES.index("女方年龄"), FEATURE_NAMES.index("女方AMH")
 
 
-class InputError(ValueError):
-    """Bad tool arguments; reported to the agent as an HTTP 400."""
-
-
 def amh_band(value: float) -> tuple[float, float, str]:
     """Bands are [low, high): 1.2 falls in the middle band, 3.5 in the high band."""
     return next(band for band in AMH_BANDS if band[0] <= value < band[1])
 
 
-def _number(arguments: dict, key: str, low: float, high: float) -> float:
-    raw = arguments.get(key)
-    if raw is None or isinstance(raw, bool):
-        raise InputError(f"缺少 {key}")
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        raise InputError(f"{key} 必须是数值，收到 {raw!r}") from None
-    if not (math.isfinite(value) and low <= value <= high):
-        raise InputError(f"{key} 必须在 {low}–{high} 之间，收到 {raw!r}")
-    return value
-
-
 class SimilarCohort:
     def __init__(self, training: TrainingSet, *, exclude_case: str | None = None, k_folds: int = 5):
-        keep = np.ones(len(training.case_ids), dtype=bool)
-        self.scope = "全部训练病例"
-        if exclude_case is not None:
-            if exclude_case not in training.case_ids:
-                raise ValueError(f"exclude_case {exclude_case} is not a training case")
-            folds = np.array(assign_folds(training.case_ids, training.labels.tolist(), k_folds))
-            keep = folds != folds[training.case_ids.index(exclude_case)]
-            self.scope = f"训练病例中排除当前病例所在的 1/{k_folds}"
-        ids = [cid for cid, k in zip(training.case_ids, keep) if k]
-        self.age, self.amh = training.matrix[keep, AGE], training.matrix[keep, AMH]
-        self.labels = training.labels[keep]
+        training, self.scope = training.visible(exclude_case, k_folds)
+        ids = training.case_ids
+        self.age, self.amh = training.matrix[:, AGE], training.matrix[:, AMH]
+        self.labels = training.labels
         self.searchable = ~np.isnan(self.age) & ~np.isnan(self.amh)
         self._tiebreak = np.array([int(hashlib.sha256(f"tie:{c}".encode()).hexdigest()[:12], 16) for c in ids])
 
     def query(self, arguments: dict) -> dict:
-        age = _number(arguments, "age", 18, 55)
-        amh = _number(arguments, "amh", 0, 50)
+        age = number_argument(arguments, "age", 18, 55)
+        amh = number_argument(arguments, "amh", 0, 50)
         window = arguments.get("age_window", AGE_WINDOW[0])
         if not isinstance(window, int) or isinstance(window, bool) or not AGE_WINDOW[0] <= window <= AGE_WINDOW[1]:
             raise InputError(f"age_window 必须是 {AGE_WINDOW[0]}–{AGE_WINDOW[1]} 之间的整数（岁）")

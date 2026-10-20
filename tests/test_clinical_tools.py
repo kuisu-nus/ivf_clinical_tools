@@ -15,9 +15,10 @@ from pathlib import Path
 import numpy as np
 
 from clinical_tools.cleaning import clean_file, clean_matrix, load_training, rows_to_training
-from clinical_tools.service import make_server, write_specs
-from clinical_tools.similar import MIN_COHORT, InputError, SimilarCohort, amh_band, tool_spec
-from clinical_tools.common import FEATURE_NAMES
+from clinical_tools.common import FEATURE_NAMES, InputError
+from clinical_tools.predict import AMH_FLOOR, OutcomePredictor, auc, design, fit_logistic
+from clinical_tools.service import make_server, tool_specs, write_specs
+from clinical_tools.similar import MIN_COHORT, SimilarCohort, amh_band
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK = ROOT / "task"
@@ -136,10 +137,61 @@ class SimilarCohortTests(unittest.TestCase):
                 self.cohort.query(bad)
 
 
+class PredictorTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.training = rows_to_training(synthetic_rows())
+        cls.predictor = OutcomePredictor(cls.training)
+
+    def test_fit_recovers_known_coefficients(self):
+        rng = np.random.default_rng(0)
+        age, amh = rng.uniform(22, 45, 20000), rng.uniform(0.1, 8, 20000)
+        x = design(age, amh)
+        truth = np.array([-0.3, -0.08, -0.004, 0.25])
+        y = (rng.random(len(age)) < 1 / (1 + np.exp(-(x @ truth)))).astype(int)
+        beta, cov = fit_logistic(x, y)
+        np.testing.assert_allclose(beta, truth, atol=4 * np.sqrt(np.diag(cov)).max())
+
+    def test_auc_matches_the_pairwise_definition(self):
+        scores = np.array([0.1, 0.4, 0.4, 0.35, 0.8, 0.4])
+        labels = np.array([0, 0, 1, 1, 1, 0])
+        pos, neg = scores[labels == 1], scores[labels == 0]
+        expected = np.mean([(p > n) + 0.5 * (p == n) for p in pos for n in neg])
+        self.assertAlmostEqual(auc(scores, labels), expected)
+
+    def test_prediction_is_bounded_and_follows_age(self):
+        young, old = self.predictor.query({"age": 26, "amh": 2.0}), self.predictor.query({"age": 43, "amh": 2.0})
+        for r in (young, old):
+            self.assertFalse(r["拒绝预测"])
+            self.assertLessEqual(r["95%置信区间"][0], r["概率"])
+            self.assertLessEqual(r["概率"], r["95%置信区间"][1])
+        self.assertGreater(young["概率"], old["概率"])
+        self.assertIn("交叉验证AUC", young["模型卡片"])
+        self.assertNotRegex(json.dumps(young, ensure_ascii=False), r"\b0\d{3}\b")
+
+    def test_missing_amh_floor_and_out_of_range(self):
+        age_only = self.predictor.query({"age": 30})
+        self.assertIn("仅含年龄", age_only["备注"][0])
+        self.assertEqual(age_only["模型卡片"]["模型"], "逻辑回归：年龄、年龄²")
+        floor = self.predictor.query({"age": 30, "amh": 0.001})
+        self.assertEqual(floor["概率"], self.predictor.query({"age": 30, "amh": AMH_FLOOR})["概率"])
+        self.assertTrue(self.predictor.query({"age": 50, "amh": 1})["拒绝预测"])
+        self.assertTrue(self.predictor.query({"age": 30, "amh": 45})["拒绝预测"])
+        for bad in ({"amh": 1}, {"age": 30, "amh": "x"}, {"age": 30, "fsh": 8}):
+            with self.assertRaises(InputError):
+                self.predictor.query(bad)
+
+    def test_excluding_a_case_refits_without_its_fold(self):
+        hidden = OutcomePredictor(self.training, exclude_case="0007")
+        self.assertLess(hidden.with_amh.n, self.predictor.with_amh.n)
+        self.assertIn("排除当前病例", hidden.query({"age": 30, "amh": 2})["模型卡片"]["训练范围"])
+
+
 class ServiceAndBridgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = make_server(SimilarCohort(rows_to_training(synthetic_rows())), port=0)
+        training = rows_to_training(synthetic_rows())
+        cls.server = make_server(SimilarCohort(training), OutcomePredictor(training), port=0)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -166,15 +218,21 @@ class ServiceAndBridgeTests(unittest.TestCase):
         status, body = self.post("/ivf/similar_patients", {"age": 30})
         self.assertEqual(status, 400)
         self.assertIn("amh", body["error"])
+        status, body = self.post("/ivf/predict_outcome", {"age": 30, "amh": 2.0})
+        self.assertEqual(status, 200)
+        self.assertGreater(body["概率"], 0)
+        status, body = self.post("/ivf/predict_outcome", {"amh": 2.0})
+        self.assertEqual(status, 400)
         with self.opener.open(self.base + "/ivf/audit", timeout=5) as response:
             calls = json.loads(response.read())["calls"]
-        self.assertEqual([c["status"] for c in calls], [200, 400])
+        self.assertEqual([c["status"] for c in calls], [200, 400, 200, 400])
 
-    def test_spec_matches_generator_and_uses_api_safe_names(self):
-        committed = json.loads((TASK / "tools" / "ivf_similar_patients.json").read_text(encoding="utf-8"))
-        self.assertEqual(committed, tool_spec())
-        for key in committed["input_schema"]["properties"]:
-            self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")
+    def test_specs_match_generator_and_use_api_safe_names(self):
+        for spec in tool_specs("http://127.0.0.1:9201"):
+            committed = json.loads((TASK / "tools" / f"{spec['name']}.json").read_text(encoding="utf-8"))
+            self.assertEqual(committed, spec)
+            for key in committed["input_schema"]["properties"]:
+                self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")
 
     def test_mcp_bridge_lists_and_calls_the_tool(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -187,15 +245,20 @@ class ServiceAndBridgeTests(unittest.TestCase):
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                 {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                  "params": {"name": "ivf_similar_patients", "arguments": {"age": 44, "amh": 0.15}}},
+                {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                 "params": {"name": "ivf_predict_outcome", "arguments": {"age": 38, "amh": 0.9}}},
             ]
             out = subprocess.run([sys.executable, str(TASK / "runtime" / "claw_tools_mcp.py")], env=env, timeout=30,
                                  input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True)
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
-            self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]], ["ivf_similar_patients"])
+            self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]],
+                             ["ivf_predict_outcome", "ivf_similar_patients"])
             call = replies[3]["result"]
             self.assertFalse(call["isError"])
             self.assertTrue(json.loads(call["content"][0]["text"])["拒绝统计"])
+            self.assertFalse(json.loads(replies[4]["result"]["content"][0]["text"])["拒绝预测"])
             trace = [json.loads(line) for line in (Path(tmp) / "trace" / "dispatches.jsonl").read_text().splitlines()]
+            self.assertEqual([t["tool_name"] for t in trace], ["ivf_similar_patients", "ivf_predict_outcome"])
             self.assertEqual(trace[0]["request_body"], {"age": 44, "amh": 0.15})
 
 

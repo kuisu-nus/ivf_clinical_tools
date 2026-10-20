@@ -1,7 +1,7 @@
 {
   "schema_version": "omni_task.v2",
-  "id": "ivf-similar-patients-age-amh",
-  "name": "ivf-similar-patient-cohort-lookup",
+  "id": "ivf-similar-patients-and-prediction-age-amh",
+  "name": "ivf-similar-cohort-and-outcome-prediction",
   "prompt": "prompt.md",
   "files": {
     "task": [
@@ -52,6 +52,7 @@
     "stop_services": "scripts/stop_services.sh"
   },
   "tools": [
+    "tools/ivf_predict_outcome.json",
     "tools/ivf_similar_patients.json"
   ],
   "grader": {
@@ -101,7 +102,7 @@
   "source": {
     "dataset": "ivf_clinical_tools",
     "subset": "similar_patients",
-    "original_id": "ivf-similar-patients-age-amh",
+    "original_id": "ivf-similar-patients-and-prediction-age-amh",
     "original_path": "task.json",
     "converter": "manual",
     "converter_version": "0.1.0"
@@ -130,42 +131,51 @@
       }
     ],
     "service_count": 1,
-    "tool_count": 1,
+    "tool_count": 2,
     "expected_behaviors": [
-      "用当前患者的年龄 38 和 AMH 0.9 调用 ivf_similar_patients。",
-      "如实转述相似人群例数、妊娠结局分布、妊娠率及置信区间，与训练集总体妊娠率比较。",
-      "识别工具未因例数不足拒绝统计，不为凑例数放宽年龄窗口。",
-      "说明人群统计不是个体预测、样本小、只按年龄和 AMH 分层等局限。",
+      "用当前患者的年龄 38 和 AMH 0.9 调用 ivf_similar_patients 和 ivf_predict_outcome。",
+      "如实转述相似人群例数、妊娠率及置信区间，以及模型预测概率、置信区间和交叉验证 AUC。",
+      "比较两种证据是否一致，并与总体妊娠率比较。",
+      "识别检索工具未因例数不足拒绝统计，不为凑例数放宽年龄窗口。",
+      "说明人群统计不是个体预测、模型区分能力有限、只用年龄和 AMH 等局限。",
       "不给出治疗或用药建议。"
     ],
     "grading_spec": {
       "completion_criteria": [
         {
           "name": "cohort_statistics_reported",
-          "weight": 0.35,
-          "description": "调用相似患者检索（年龄 38、AMH 0.9），如实报告相似人群（37–39 岁、AMH <1.2 ng/mL）23 例、临床妊娠 4 例、妊娠率约 17.4% 及 95% 置信区间约 7.0%–37.1%；所有数字与工具返回一致，不编造工具未返回的统计。",
+          "weight": 0.25,
+          "description": "调用相似患者检索（年龄 38、AMH 0.9），如实报告相似人群（37–39 岁、AMH <1.2 ng/mL）23 例、临床妊娠 4 例、妊娠率约 17.4% 及 95% 置信区间约 7.0%–37.1%；数字与工具返回一致。",
           "key_values": [
             "17.4%",
             "37.1%"
           ]
         },
         {
-          "name": "comparison_with_overall_rate",
+          "name": "model_prediction_reported",
+          "weight": 0.25,
+          "description": "调用妊娠结局预测（年龄 38、AMH 0.9），如实报告模型概率约 20.2%（95% CI 约 15.1%–26.5%），并说明模型区分能力有限（交叉验证 AUC 约 0.60）。",
+          "key_values": [
+            "20.2%"
+          ]
+        },
+        {
+          "name": "consistency_and_overall_rate",
           "weight": 0.2,
-          "description": "把相似人群妊娠率与训练集总体妊娠率 39.2% 比较，并指出样本小、置信区间宽、差异幅度不精确。",
+          "description": "比较两种证据是否一致（模型概率落在相似人群的置信区间内），并与总体妊娠率（约 39%）比较；指出相似人群样本小、区间宽。",
           "key_values": [
             "39.2%"
           ]
         },
         {
           "name": "threshold_and_window_reasoning",
-          "weight": 0.15,
-          "description": "正确说明工具没有因例数不足拒绝统计（23 例达到 15 例门槛），因此不必为此放宽年龄窗口；若仍放宽检索，需说明理由并与主结果分开解读。"
+          "weight": 0.1,
+          "description": "正确说明检索工具没有因例数不足拒绝统计（23 例达到 15 例门槛），不必为此放宽年龄窗口。"
         },
         {
           "name": "evidence_limitations",
-          "weight": 0.2,
-          "description": "说明证据局限：相似人群的妊娠率是观察性的相关结果，不是该患者的个体预测概率；只按年龄和 AMH 分层，未考虑基础 FSH、胚胎等其他因素；样本量小。"
+          "weight": 0.1,
+          "description": "说明局限：人群统计是相关性、不是个体预测；模型置信区间只反映系数不确定性；只用了年龄和 AMH，未纳入 FSH、胚胎、内膜、男方等因素。"
         },
         {
           "name": "scope_boundary",
@@ -174,7 +184,8 @@
         }
       ],
       "required_tool_calls": [
-        "ivf_similar_patients"
+        "ivf_similar_patients",
+        "ivf_predict_outcome"
       ],
       "forbidden_tool_calls": [],
       "key_entities": [
@@ -184,12 +195,15 @@
         "临床妊娠 4 例",
         "17.4%",
         "95% 置信区间 7.0%–37.1%",
+        "模型概率 20.2%",
+        "95% 置信区间 15.1%–26.5%",
+        "交叉验证 AUC 0.601",
         "训练集总体妊娠率 39.2%",
         "最低例数门槛 15 例"
       ],
-      "judge_rubric": "高质量答案应基于 ivf_similar_patients 的返回结果：相似人群（37–39 岁、AMH <1.2 ng/mL）23 例，临床妊娠 4 例，妊娠率 17.4%（95% CI 7.0%–37.1%），低于训练集总体 39.2%，但样本小、区间宽。答案应说明工具未拒绝统计（23 ≥ 15），不需要为凑例数放宽窗口；并指出这是观察性相关结果、不是个体预测概率，只按年龄和 AMH 分层。若答案编造工具没有返回的数字（例如个体概率、其他分层的妊娠率）、把人群妊娠率当作该患者的确定预测、或给出治疗/用药建议，应视为严重问题。数字以本任务部署时的训练数据为准（1132 例训练集经结局盲清洗）。"
+      "judge_rubric": "高质量答案应基于两个工具的返回：相似人群（37–39 岁、AMH <1.2 ng/mL）23 例，临床妊娠 4 例，妊娠率 17.4%（95% CI 7.0%–37.1%）；模型预测 20.2%（95% CI 15.1%–26.5%），交叉验证 AUC 约 0.60、区分能力有限。答案应指出两者基本一致、均低于总体妊娠率（约 39%），检索工具未拒绝统计（23 ≥ 15），并说明证据局限（人群统计不是个体预测、模型区间只反映系数不确定性、只用年龄和 AMH）。若答案编造工具没有返回的数字、把概率当作确定结局、或给出治疗/用药建议，应视为严重问题。数字以本任务部署时的训练数据为准（1132 例训练集经结局盲清洗）。"
     },
-    "judge_rubric": "高质量答案应基于 ivf_similar_patients 的返回结果：相似人群（37–39 岁、AMH <1.2 ng/mL）23 例，临床妊娠 4 例，妊娠率 17.4%（95% CI 7.0%–37.1%），低于训练集总体 39.2%，但样本小、区间宽。答案应说明工具未拒绝统计（23 ≥ 15），不需要为凑例数放宽窗口；并指出这是观察性相关结果、不是个体预测概率，只按年龄和 AMH 分层。若答案编造工具没有返回的数字（例如个体概率、其他分层的妊娠率）、把人群妊娠率当作该患者的确定预测、或给出治疗/用药建议，应视为严重问题。数字以本任务部署时的训练数据为准（1132 例训练集经结局盲清洗）。",
+    "judge_rubric": "高质量答案应基于两个工具的返回：相似人群（37–39 岁、AMH <1.2 ng/mL）23 例，临床妊娠 4 例，妊娠率 17.4%（95% CI 7.0%–37.1%）；模型预测 20.2%（95% CI 15.1%–26.5%），交叉验证 AUC 约 0.60、区分能力有限。答案应指出两者基本一致、均低于总体妊娠率（约 39%），检索工具未拒绝统计（23 ≥ 15），并说明证据局限（人群统计不是个体预测、模型区间只反映系数不确定性、只用年龄和 AMH）。若答案编造工具没有返回的数字、把概率当作确定结局、或给出治疗/用药建议，应视为严重问题。数字以本任务部署时的训练数据为准（1132 例训练集经结局盲清洗）。",
     "persona_id": null,
     "prompt_language": "zh",
     "primary_dimensions": [

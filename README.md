@@ -1,5 +1,5 @@
 > template origin: https://huggingface.co/datasets/huang3eng/Dressage-Claw
-> template task: stock-analysis-five-dimension_1eecda49d411（已替换为 IVF 任务 `ivf-similar-patients-age-amh`）
+> template task: stock-analysis-five-dimension_1eecda49d411（已替换为 IVF 任务 `ivf-similar-patients-and-prediction-age-amh`）
 
 ## Background
 基于这个MCP的模板，构建IVF-Clinical-Tools的MCP服务，用于IVF-Agentic根据患者的实际情况进行工具的调用。
@@ -37,18 +37,18 @@ tasks/<task_id>/
 | 目标 | 状态 |
 |---|---|
 | 目标一：相似患者检索 `ivf_similar_patients` | 已完成：URL 测试通过，已在本地部署 |
-| 目标一：妊娠结局预测 ML | 未开始 |
-| 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code（DeepSeek 后端）自主调用，调用轨迹写入 `dispatches.jsonl` |
+| 目标一：妊娠结局预测 ML `ivf_predict_outcome` | 已完成：URL 测试通过，已在本地部署 |
+| 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code 自主调用两个工具并比较结果，调用轨迹写入 `dispatches.jsonl` |
 
 ### 仓库结构（本仓库即一个任务目录）
 
 ```markdown
 ├── task.json                      # 任务元数据、grader 配置、文件映射（已改为 IVF 任务）
 ├── task/
-│   ├── prompt.md                  # 示例任务：虚构患者 38 岁、AMH 0.9
+│   ├── prompt.md                  # 示例任务：虚构患者 38 岁、AMH 0.9，要求使用两个工具
 │   ├── scripts/                   # setup.sh、start_services.sh、stop_services.sh
-│   ├── tools/ivf_similar_patients.json   # MCP 工具规格（由代码生成）
-│   ├── services/clinical_tools/   # 工具服务：common / cleaning / similar / service（只依赖 numpy）
+│   ├── tools/                     # ivf_similar_patients.json、ivf_predict_outcome.json（由代码生成）
+│   ├── services/clinical_tools/   # 工具服务：common / cleaning / similar / predict / service（只依赖 numpy）
 │   └── runtime/                   # claw_tools_mcp.py、gen_trace.py、patch_llm_judge.py（模板原样）、system_prompt_prefix.txt
 ├── grader/                        # 模板打分框架原样；grader.py 中只替换了 GRADING_SPEC
 ├── tests/test_clinical_tools.py   # 单元测试（合成数据）
@@ -74,7 +74,25 @@ tasks/<task_id>/
 - **门槛：符合条件少于 15 例时拒绝返回统计**，只返回例数和放宽建议，不返回妊娠率和个体结局。
 - 达到门槛时返回：例数、临床妊娠/未妊娠数、妊娠率与 95% Wilson 置信区间、训练集总体妊娠率、年龄和 AMH 的中位数（范围）、相似患者列表（年龄、AMH、结局，按接近程度排列，最多 50 例）；AMH=0.02 的病例单独标注（可能为检测下限）。
 - 不返回病例编号，也不用编号排序（本数据集编号顺序本身对应结局）。
-- 为 agentic RL 预留 `IVF_EXCLUDE_CASE`：评估某训练病例时，工具看不到该病例所在的 1/5 数据。
+- 为 agentic RL 预留 `IVF_EXCLUDE_CASE`：评估某训练病例时，两个工具都看不到该病例所在的 1/5 数据（预测模型也在剩余数据上重新拟合）。
+
+### 工具：`ivf_predict_outcome`
+
+- 输入：`age`（必填）、`amh`（可选）。
+- 模型：逻辑回归 logit p = b0 + b1·(年龄−33) + b2·(年龄−33)² + b3·log(AMH)，AMH 低于 0.02 按 0.02 计算；不提供 AMH 时用只含年龄（及年龄²）的模型。用 numpy 牛顿法拟合，与 sklearn 结果一致。
+- 模型选择（清洗后训练集，重复 5 折交叉验证）：
+
+  | 候选 | AUC | Brier |
+  |---|---|---|
+  | 年龄 | 0.569 | 0.2331 |
+  | 年龄 + log AMH | 0.588 | 0.2312 |
+  | **年龄 + 年龄² + log AMH（采用）** | **0.601** | **0.2290** |
+  | 年龄 + log AMH + 交互项 | 0.580 | 0.2316 |
+  | 对照：35 项指标 LR（中位数插补） | 约 0.59 | — |
+  | 对照：一律预测总体妊娠率 | 0.5 | 0.2367 |
+
+- 返回：概率、95% 置信区间（系数不确定性的 Wald 区间，不是个体结局范围）、年龄和 AMH 各自相对平均患者的对数几率、模型卡片（训练样本数、交叉验证 AUC 与 Brier、对照 Brier、适用范围）。
+- 年龄超出训练范围（19–46 岁）或 AMH 超过训练最大值（30.8）时拒绝预测，不外推。
 
 ### 运行
 
@@ -86,6 +104,7 @@ PYTHONPATH=task/services python -m clinical_tools.cleaning --input xgb_train_113
 IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv bash task/scripts/start_services.sh
 # 3. URL 测试
 curl -X POST http://127.0.0.1:9201/ivf/similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
+curl -X POST http://127.0.0.1:9201/ivf/predict_outcome -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
 # 其他端点：GET /health，GET /ivf/audit（调用记录），POST /ivf/reset
 # 4. 停止
 bash task/scripts/stop_services.sh
@@ -97,12 +116,12 @@ Windows：`$env:PYTHONPATH="task/services"; python -m clinical_tools.service --c
 
 1. 把 `mcp.example.json` 中的 `<仓库绝对路径>` 换成实际路径（Windows 用正斜杠），另存为 `.mcp.json`；`command` 建议写 Python 的完整路径。
 2. 后端为 DeepSeek 等非 Anthropic 模型时，先设置 `ENABLE_TOOL_SEARCH=false`，让工具定义直接发给模型。
-3. 运行：`claude -p "$(cat task/prompt.md)" --mcp-config .mcp.json --strict-mcp-config --allowedTools "mcp__ivf-clinical__ivf_similar_patients"`
+3. 运行：`claude -p "$(cat task/prompt.md)" --mcp-config .mcp.json --strict-mcp-config --allowedTools "mcp__ivf-clinical__ivf_similar_patients" "mcp__ivf-clinical__ivf_predict_outcome"`
 4. 回溯：每次调用写入 `OMNI_TRACE_DIR/dispatches.jsonl`（参数、返回、耗时、时间）。
 
 ### 打分（grader）
 
-`grader/grader.py` 的 `GRADING_SPEC` 针对 `task/prompt.md`：必须调用 `ivf_similar_patients`；确定性部分检查关键数值（17.4%、37.1%、39.2%）是否出现在回答中；LLM judge 部分评估统计是否如实转述、门槛与窗口判断、局限说明、不给治疗建议。期望数值基于 1132 例训练集经上述清洗后的结果。
+`grader/grader.py` 的 `GRADING_SPEC` 针对 `task/prompt.md`：必须调用两个工具；确定性部分检查关键数值（17.4%、37.1%、20.2%、39.2%）是否出现在回答中；LLM judge 部分评估统计与预测是否如实转述、两种证据的一致性与总体比较、门槛与窗口判断、局限说明、不给治疗建议。期望数值基于 1132 例训练集经上述清洗后的结果。
 
 ### 测试
 
@@ -110,7 +129,7 @@ Windows：`$env:PYTHONPATH="task/services"; python -m clinical_tools.service --c
 PYTHONPATH=task/services:tests python -m unittest discover -s tests
 ```
 
-覆盖：清洗不读标签且可重复、两组回填值与异常值规则、拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折、HTTP 端点、工具规格与代码一致且参数名合规、MCP 桥接的 tools/list 与 tools/call。
+覆盖：清洗不读标签且可重复、两组回填值与异常值规则、拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折；逻辑回归能恢复已知系数、AUC 与成对定义一致、预测随年龄下降、缺 AMH 回退、超范围拒绝；HTTP 端点、工具规格与代码一致且参数名合规、MCP 桥接的 tools/list 与两个工具的 tools/call。
 
 ## Results
 
@@ -128,10 +147,21 @@ Claude Code 端到端（2026-10-20）：Windows 本地 Claude Code + DeepSeek �
 - 44 岁病例：首次调用被拒绝（8 例），随后自主把窗口放宽到 ±2、±3 岁重查。Claude 后端的总结说明了样本小、窗口变宽的局限；
 - 全部调用均记录在 `dispatches.jsonl`；两台机器（数据分别由原始训练集和 v2 训练集清洗得到）返回的工具结果完全一致。DeepSeek 后端的文字回答尚未逐条核对。
 
-Grader 自检：上述 38 岁病例的真实回答在确定性部分得满分（LLM judge 部分需配置 judge 运行）；不调用工具、编造概率并给出用药建议的回答得 0 分。
+两个工具同时使用（2026-10-20，Claude Code + Claude 后端，`task/prompt.md`）：依次调用检索（23 例，17.4%）和预测（20.2%，95% CI 15.1%–26.5%，AUC 0.601），回答指出两者一致、均低于总体妊娠率，并说明了模型区分能力有限和其他局限。
+
+预测工具示例：
+
+| 输入 | 概率 | 95% CI |
+|---|---|---|
+| 38 岁，AMH 0.9 | 0.202 | 0.151–0.265 |
+| 44 岁，AMH 0.5 | 0.052 | 0.020–0.126 |
+| 30 岁，AMH 2.5 | 0.428 | 0.391–0.465 |
+| 38 岁，无 AMH | 0.233 | 0.180–0.296 |
+| 50 岁 | 拒绝预测（超出 19–46 岁） | — |
+
+Grader 自检：上述两工具任务的真实回答在确定性部分得满分（LLM judge 部分需配置 judge 运行）；只调用一个工具得 0.375/0.5；不调用工具、编造概率并给出用药建议的回答得 0 分。
 
 ### 后续
 
-- 第二个工具：妊娠结局 ML 预测。
 - 更多任务（如例数不足、需要放宽窗口的病例），用于 agentic RL。
 - 胚胎冷冻数等条件：字段定义确认前不加入（可能泄露结局）。

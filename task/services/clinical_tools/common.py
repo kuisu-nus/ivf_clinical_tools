@@ -1,6 +1,7 @@
 """Small shared definitions so the package runs on its own (numpy only).
 
-Kept identical to the IVF agent repository's features.definitions.FEATURE_NAMES,
+InputError and number_argument validate tool arguments for every tool. The rest is
+kept identical to the IVF agent repository's features.definitions.FEATURE_NAMES,
 data.leakage_scan.parse_value/parse_label and the agentic cohort's assign_folds
 and wilson_interval; a test in that repository checks the parity.
 """
@@ -21,6 +22,25 @@ FEATURE_NAMES = (
     "男方精液处理后PR", "男方精液处理后IM",
 )
 MISSING_TOKENS = ("", "na", "nan", "none", "null")
+
+
+class InputError(ValueError):
+    """Bad tool arguments; reported to the agent as an HTTP 400."""
+
+
+def number_argument(arguments: dict, key: str, low: float, high: float, *, required: bool = True) -> float | None:
+    raw = arguments.get(key)
+    if raw is None and not required:
+        return None
+    if raw is None or isinstance(raw, bool):
+        raise InputError(f"缺少 {key}")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise InputError(f"{key} 必须是数值，收到 {raw!r}") from None
+    if not (math.isfinite(value) and low <= value <= high):
+        raise InputError(f"{key} 必须在 {low}–{high} 之间，收到 {raw!r}")
+    return value
 
 
 def parse_value(raw) -> tuple[float | None, int | None]:
