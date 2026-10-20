@@ -161,10 +161,13 @@ class PredictorTests(unittest.TestCase):
         self.assertAlmostEqual(auc(scores, labels), expected)
 
     def test_artifact_holds_only_aggregates(self):
-        self.assertEqual(set(self.artifact["coefficients"]), {"intercept", "age", "amh", "gn_days"})
+        self.assertEqual(self.artifact["features"], list(FEATURE_NAMES))
+        self.assertEqual(len(self.artifact["weights"]), len(FEATURE_NAMES))
+        self.assertEqual(np.array(self.artifact["covariance"]).shape, (len(FEATURE_NAMES) + 1,) * 2)
         self.assertEqual(self.artifact["training"]["n"], len(self.training.labels))
-        self.assertGreater(self.artifact["training"]["cv_auc"], 0.5)
-        self.assertNotRegex(json.dumps(self.artifact, ensure_ascii=False), r"\b0\d{3}\b")
+        self.assertGreater(self.artifact["training"]["cv_auc_three_inputs"], 0.5)
+        text = json.dumps(self.artifact, ensure_ascii=False)
+        self.assertFalse([cid for cid in self.training.case_ids if f'"{cid}"' in text])
 
     def test_output_is_only_probability_and_interval(self):
         young = self.predictor.query({"age": 26, "amh": 2.0, "gn_days": 10})
@@ -175,10 +178,13 @@ class PredictorTests(unittest.TestCase):
             self.assertLessEqual(r["妊娠概率"], r["95%置信区间"][1])
         self.assertGreater(young["妊娠概率"], old["妊娠概率"])
 
-    def test_missing_values_use_training_means(self):
-        means = self.artifact["imputation_means"]
+    def test_other_indicators_and_missing_inputs_use_training_means(self):
+        means = dict(zip(self.artifact["features"], self.artifact["means"]))
         self.assertEqual(self.predictor.query({"age": 33}),
-                         self.predictor.query({"age": 33, "amh": means["amh"], "gn_days": means["gn_days"]}))
+                         self.predictor.query({"age": 33, "amh": means["女方AMH"], "gn_days": means["女方用药Gn总天数"]}))
+        # with every input at its mean the logit is the intercept alone
+        at_means = self.predictor.query({"age": means["女方年龄"]})
+        self.assertAlmostEqual(at_means["妊娠概率"], 1 / (1 + np.exp(-self.artifact["intercept"])), places=3)
         for bad in ({}, {"age": "x"}, {"age": 30, "fsh": 8}, {"age": 80}, {"gn_days": -1}):
             with self.assertRaises(InputError):
                 self.predictor.query(bad)
@@ -199,7 +205,7 @@ class PredictorTests(unittest.TestCase):
                              self.predictor.query({"age": 30, "amh": 2, "gn_days": 10}))
             with self.assertRaises(SystemExit):
                 train_predictor.main(["--csv", str(source), "--out", str(out)])
-        bad = dict(self.artifact, features=[{"name": "age", "column": "女方年龄"}])
+        bad = dict(self.artifact, inputs={"age": "女方年龄"})
         with self.assertRaises(ValueError):
             Predictor(bad)
 

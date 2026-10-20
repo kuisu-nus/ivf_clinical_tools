@@ -37,7 +37,7 @@ tasks/<task_id>/
 | 目标 | 状态 |
 |---|---|
 | 目标一：相似患者检索 `ivf_similar_patients` | 已完成：独立服务（端口 9201），URL 测试通过 |
-| 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：训练与预测分离，独立服务（端口 9202），URL 测试通过 |
+| 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：35 项指标训练、预测只用三项输入，训练与预测分离，独立服务（端口 9202），URL 测试通过 |
 | 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code 自主调用两个服务并比较结果，调用轨迹写入 `dispatches.jsonl` |
 
 ### 仓库结构（本仓库即一个任务目录）
@@ -54,12 +54,12 @@ tasks/<task_id>/
 │   │   │   ├── cleaning.py          #   结局盲清洗（去泄露、去异常值）
 │   │   │   ├── similar.py           #   相似患者检索逻辑
 │   │   │   ├── similar_service.py   #   服务一：相似患者（9201），读训练数据
-│   │   │   ├── predict.py           #   逻辑回归：train_model（训练）与 Predictor（预测）
+│   │   │   ├── predict.py           #   逻辑回归：train_model（35 项训练）与 Predictor（三项输入预测）
 │   │   │   ├── train_predictor.py   #   训练脚本：训练数据 → 模型文件
 │   │   │   ├── predict_service.py   #   服务二：妊娠预测（9202），只读模型文件
 │   │   │   ├── http_service.py      #   两个服务共用的 HTTP 框架
 │   │   │   └── specs.py             #   生成 task/tools 下的工具规格
-│   │   └── models/lr_age_amh_gn.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
+│   │   └── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
 │   └── runtime/                     # claw_tools_mcp.py、gen_trace.py、patch_llm_judge.py（模板原样）、system_prompt_prefix.txt
 ├── grader/                          # 模板打分框架原样；grader.py 中只替换了 GRADING_SPEC
 ├── tests/test_clinical_tools.py     # 单元测试（合成数据）
@@ -93,27 +93,26 @@ tasks/<task_id>/
 
 ```bash
 # 训练（离线，一次）：训练数据 → 模型文件
-PYTHONPATH=task/services python -m clinical_tools.train_predictor --csv <训练集CSV> --out task/services/models/lr_age_amh_gn.json
+PYTHONPATH=task/services python -m clinical_tools.train_predictor --csv <训练集CSV> --out task/services/models/lr_35_indicators.json
 # 预测服务：只读模型文件，不需要训练数据
-PYTHONPATH=task/services python -m clinical_tools.predict_service --model task/services/models/lr_age_amh_gn.json
+PYTHONPATH=task/services python -m clinical_tools.predict_service --model task/services/models/lr_35_indicators.json
 ```
 
-- 变量：只用 `age`（女方年龄）、`amh`（AMH）、`gn_days`（女方 Gn 用药总天数），线性进入逻辑回归；用 numpy 牛顿法拟合（与 sklearn 结果一致）。
-- 缺失处理：训练和预测时，缺失的变量都用训练集均值代替（年龄 30.50，AMH 3.53，Gn 10.09；训练集中 AMH 缺失 87 例）。预测时三个变量至少提供一个。
-- **输出只有两项**：`{"妊娠概率": 0.278, "95%置信区间": [0.23, 0.333]}`。置信区间是系数协方差得到的 Wald 区间（logit 尺度），只反映模型估计的不确定性，不是个体结局的范围。
-- 模型文件 `models/lr_age_amh_gn.json`：系数、协方差矩阵、填补用均值、训练样本数、交叉验证指标、训练数据 SHA256；不含任何逐病例记录。已有同名文件时训练脚本拒绝覆盖。
-- 模型表现（1132 例，5 次重复 5 折交叉验证，每折内重新计算填补均值）：
+- **训练**（与项目之前的 LR 相同）：全部 35 项指标，缺失用训练集均值填补，标准化，L2 正则逻辑回归（C=1，不做类别加权）；用 numpy 牛顿法拟合，与 sklearn `LogisticRegression(C=1)` 的系数一致（最大差 5×10⁻⁷）。
+- **预测**：只接收 `age`（女方年龄）、`amh`（AMH）、`gn_days`（Gn 用药总天数）；其余 32 项指标，以及这三项中没有提供的，都用训练集均值代替。三项至少提供一个。
+- **输出只有两项**：`{"妊娠概率": 0.267, "95%置信区间": [0.217, 0.324]}`。置信区间是由系数协方差得到的 Wald 区间（logit 尺度），只反映模型估计的不确定性，不是个体结局的范围。
+- 模型文件 `models/lr_35_indicators.json`：35 项指标的均值与标准差、截距与系数、协方差矩阵、训练样本数、交叉验证指标、训练数据 SHA256；不含任何逐病例记录。已有同名文件时训练脚本拒绝覆盖。
+- 模型表现（1132 例，5 次重复 5 折交叉验证，均值、标准差、系数都在每折训练部分重新计算）：
 
-  | 变量 | AUC | Brier |
+  | 使用方式 | AUC | Brier |
   |---|---|---|
-  | 年龄 | 0.566 | 0.2350 |
-  | 年龄 + AMH | 0.570 | 0.2351 |
-  | 年龄 + Gn 天数 | 0.595 | 0.2318 |
-  | **年龄 + AMH + Gn 天数（采用）** | **0.594** | **0.2323** |
+  | 预测时给全部 35 项 | 0.590 | 0.2384 |
+  | **预测时只给年龄、AMH、Gn 天数（本工具）** | **0.593** | **0.2326** |
   | 对照：一律预测总体妊娠率 | 0.5 | 0.2384 |
 
-  系数（对数几率）：截距 −0.817，年龄 −0.056/岁，AMH +0.023/(ng/mL)，Gn +0.197/天。
-- 注意：Gn 用药总天数在数据中只有 8–12 天五个取值，疑似被截断；年龄线性进入，对 37 岁以后妊娠率加速下降刻画不足（曾试过加入年龄²与 log AMH，AUC 0.601，按要求改为三变量线性模型）。
+  只给三项时并不比给全部指标差：其余指标的作用很弱，且多为噪声。
+- 三项输入在原始尺度上的系数（对数几率）：年龄 −0.061/岁，AMH +0.015/(ng/mL)，Gn +0.211/天。
+- 注意：Gn 用药总天数在数据中只有 8–12 天五个取值，疑似被截断；年龄线性进入，对 37 岁以后妊娠率加速下降刻画不足。
 - agentic RL 时如需排除被评估病例，用 `train_predictor --exclude-case <ID>` 另训一个模型文件。
 
 ### 运行
@@ -122,7 +121,7 @@ PYTHONPATH=task/services python -m clinical_tools.predict_service --model task/s
 pip install -r requirements.txt
 # 1. 清洗训练集（只需一次）
 PYTHONPATH=task/services python -m clinical_tools.cleaning --input xgb_train_1132.csv --out-dir outputs/clean_v1
-# 2. 分别启动两个服务（模型文件默认用 task/services/models/lr_age_amh_gn.json）
+# 2. 分别启动两个服务（模型文件默认用 task/services/models/lr_35_indicators.json）
 IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv bash task/scripts/start_services.sh
 # 3. URL 测试
 curl -X POST http://127.0.0.1:9201/ivf/similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
@@ -137,7 +136,7 @@ Windows（两个窗口分别运行）：
 ```powershell
 $env:PYTHONPATH = "task/services"
 python -m clinical_tools.similar_service --csv outputs\clean_v1\train_clean.csv
-python -m clinical_tools.predict_service --model task\services\models\lr_age_amh_gn.json
+python -m clinical_tools.predict_service --model task\services\models\lr_35_indicators.json
 ```
 
 ### 接入 Claude Code
@@ -149,7 +148,7 @@ python -m clinical_tools.predict_service --model task\services\models\lr_age_amh
 
 ### 打分（grader）
 
-`grader/grader.py` 的 `GRADING_SPEC` 针对 `task/prompt.md`：必须调用两个工具；确定性部分检查关键数值（17.4%、37.1%、27.8%、39.2%）是否出现在回答中；LLM judge 部分评估统计与预测是否如实转述、两种证据的一致性与总体比较、门槛与窗口判断、局限说明、不给治疗建议。期望数值基于 1132 例训练集经上述清洗后的结果和 `models/lr_age_amh_gn.json`。
+`grader/grader.py` 的 `GRADING_SPEC` 针对 `task/prompt.md`：必须调用两个工具；确定性部分检查关键数值（17.4%、37.1%、26.7%、39.2%）是否出现在回答中；LLM judge 部分评估统计与预测是否如实转述、两种证据的一致性与总体比较、门槛与窗口判断、局限说明、不给治疗建议。期望数值基于 1132 例训练集经上述清洗后的结果和 `models/lr_35_indicators.json`。
 
 ### 测试
 
@@ -157,7 +156,7 @@ python -m clinical_tools.predict_service --model task\services\models\lr_age_amh
 PYTHONPATH=task/services:tests python -m unittest discover -s tests
 ```
 
-覆盖：清洗不读标签且可重复、两组回填值与异常值规则、拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折；逻辑回归能恢复已知系数、AUC 与成对定义一致、模型文件只含汇总量、预测输出只有概率和置信区间、缺失用训练均值、训练脚本不覆盖已有模型、删除训练数据后仍能预测；两个服务各自只提供自己的端点、工具规格与代码一致且端口正确、MCP 桥接调用两个服务。
+覆盖：清洗不读标签且可重复、两组回填值与异常值规则、拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折；逻辑回归能恢复已知系数、AUC 与成对定义一致、模型文件只含汇总量、预测输出只有概率和置信区间、其余指标与缺失输入用训练均值、训练脚本不覆盖已有模型、删除训练数据后仍能预测；两个服务各自只提供自己的端点、工具规格与代码一致且端口正确、MCP 桥接调用两个服务。
 
 ## Results
 
@@ -172,19 +171,19 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 | 44 岁，AMH 0.5，窗口 ±2 | 42–46 岁，AMH <1.2 | 15 | 妊娠 0 例，0%（95% CI 0–20.4%） |
 | 44 岁，AMH 0.5，窗口 ±3 | 41–47 岁，AMH <1.2 | 16 | 妊娠 0 例，0%（95% CI 0–19.4%） |
 
-妊娠预测（`models/lr_age_amh_gn.json`）：
+妊娠预测（`models/lr_35_indicators.json`）：
 
 | 输入 | 妊娠概率 | 95% CI |
 |---|---|---|
-| 38 岁，AMH 0.9，Gn 10 天 | 0.278 | 0.230–0.333 |
-| 38 岁，AMH 0.9（Gn 用均值） | 0.282 | 0.233–0.337 |
-| 44 岁，AMH 0.5，Gn 9 天 | 0.183 | 0.129–0.255 |
-| 30 岁，AMH 2.5，Gn 12 天 | 0.481 | 0.428–0.535 |
-| 只提供 38 岁 | 0.294 | 0.245–0.350 |
+| 38 岁，AMH 0.9，Gn 10 天 | 0.267 | 0.217–0.324 |
+| 38 岁，AMH 0.9（Gn 用均值） | 0.271 | 0.221–0.328 |
+| 44 岁，AMH 0.5，Gn 9 天 | 0.169 | 0.115–0.241 |
+| 30 岁，AMH 2.5，Gn 12 天 | 0.482 | 0.426–0.538 |
+| 只提供 38 岁 | 0.279 | 0.229–0.336 |
 
 Claude Code 端到端（2026-10-20）：
 - 只有相似检索时：Windows 本地 Claude Code + DeepSeek 后端与 Linux 上 Claude 后端的调用序列相同。38 岁病例调用 1 次；44 岁病例首次被拒绝（8 例），随后自主把窗口放宽到 ±2、±3 岁重查。两台机器（数据分别由原始训练集和 v2 训练集清洗得到）返回的工具结果完全一致。
-- 两个独立服务（Claude 后端，`task/prompt.md`）：分别调用 9201 的检索（23 例，17.4%）和 9202 的预测（27.8%，95% CI 23.0%–33.3%），回答指出模型概率落在相似人群区间内但点估计高约 10 个百分点、两者都低于总体 39.2%，并说明了模型只用三项变量、区分能力有限等局限；所有数字与工具返回一致。
+- 两个独立服务（Claude 后端，`task/prompt.md`）：分别调用 9201 的检索（23 例，17.4%）和 9202 的预测（26.7%，95% CI 21.7%–32.4%），回答指出模型区间落在相似人群区间内、点估计高约 9 个百分点、两者都低于总体 39.2%，并说明了模型预测时只用三项输入、区分能力有限等局限；所有数字与工具返回一致。
 - 此前版本（预测输出含模型卡片）在 DeepSeek 后端下的回答也逐条核对过，引用的数字全部来自工具返回。
 
 Grader 自检：上述两服务任务的真实回答在确定性部分得满分（LLM judge 部分需配置 judge 运行）；只调用一个工具会扣掉必需工具覆盖分；不调用工具、编造概率并给出用药建议的回答得 0 分。

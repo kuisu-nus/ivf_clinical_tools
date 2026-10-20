@@ -3,7 +3,7 @@
   POST /ivf/predict_outcome    {"age": 38, "amh": 0.9, "gn_days": 10}
   ->                           {"妊娠概率": 0.2, "95%置信区间": [0.15, 0.26]}
 
-  python -m clinical_tools.predict_service --model models/lr_age_amh_gn.json [--port 9202]
+  python -m clinical_tools.predict_service --model models/lr_35_indicators.json [--port 9202]
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ DEFAULT_PORT = 9202
 
 def build(predictor: Predictor, host: str = "127.0.0.1", port: int = DEFAULT_PORT):
     health = {"tool": "ivf_predict_outcome", "model_training_n": predictor.training["n"],
-              "model_cv_auc": predictor.training["cv_auc"]}
+              "model_cv_auc_three_inputs": predictor.training["cv_auc_three_inputs"]}
     return make_server({"/ivf/predict_outcome": predictor.query}, health, host, port), health
 
 
