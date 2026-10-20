@@ -1,45 +1,38 @@
-"""Clinical pregnancy prediction from female age and AMH (logistic regression, numpy only).
+"""Clinical pregnancy prediction: logistic regression on age, AMH and Gn days.
 
-Model: logit p = b0 + b1 (age - 33) + b2 (age - 33)^2 + b3 log(AMH), with AMH
-floored at 0.02 ng/mL (the most common lowest value, likely the assay limit).
-Chosen on the cleaned training set by repeated 5-fold cross-validation over
-age only, age + log AMH, age + age^2 + log AMH and an age x AMH interaction;
-the quadratic age term let the decline steepen in the late thirties and gave
-the best AUC and Brier score. Without AMH the age-only quadratic model is used.
+Training and prediction are separate. ``train_model`` fits the model on the
+cleaned training set and returns a JSON-serialisable artifact (coefficients,
+their covariance, the training means used for imputation and training metrics);
+``clinical_tools.train_predictor`` writes it to disk. ``Predictor`` loads only
+that artifact, never the training data, and returns the probability with a 95%
+interval (Wald interval on the logit, from the coefficient covariance).
 
-The 95% interval reflects uncertainty in the fitted coefficients (Wald interval
-on the logit), not the range of outcomes for one patient. Inputs outside the
-training range are refused rather than extrapolated. Cross-validated AUC and
-Brier score are recomputed at start-up on the visible cases and reported with
-every prediction so the agent can weigh the model.
+Features enter linearly. A missing feature, in training or at prediction time,
+is replaced by its training mean.
 """
 
 from __future__ import annotations
 
+import json
 import math
+from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 
 from clinical_tools.cleaning import TrainingSet
 from clinical_tools.common import FEATURE_NAMES, InputError, assign_folds, number_argument
 
-AGE, AMH = FEATURE_NAMES.index("女方年龄"), FEATURE_NAMES.index("女方AMH")
-AGE_CENTRE = 33.0
-AMH_FLOOR = 0.02
+# (argument name, training column, valid input range)
+FEATURES = (("age", "女方年龄", (18, 55)), ("amh", "女方AMH", (0, 50)), ("gn_days", "女方用药Gn总天数", (1, 30)))
 CV_FOLDS, CV_REPEATS = 5, 5
 Z95 = 1.959964
-
-
-def design(age: np.ndarray, amh: np.ndarray | None) -> np.ndarray:
-    a = np.asarray(age, dtype=float) - AGE_CENTRE
-    columns = [np.ones_like(a), a, a ** 2]
-    if amh is not None:
-        columns.append(np.log(np.maximum(np.asarray(amh, dtype=float), AMH_FLOOR)))
-    return np.column_stack(columns)
+ARTIFACT_VERSION = 1
 
 
 def fit_logistic(x: np.ndarray, y: np.ndarray, *, ridge: float = 1e-6, iterations: int = 100) -> tuple[np.ndarray, np.ndarray]:
-    """Newton-Raphson maximum likelihood; returns coefficients and their covariance."""
+    """Newton-Raphson maximum likelihood (x includes the intercept column);
+    returns coefficients and their covariance."""
     beta = np.zeros(x.shape[1])
     penalty = ridge * np.eye(x.shape[1])
     penalty[0, 0] = 0.0
@@ -71,110 +64,95 @@ def auc(scores: np.ndarray, labels: np.ndarray) -> float:
     return float((ranks[labels == 1].sum() - positives * (positives + 1) / 2) / (positives * negatives))
 
 
-class _Model:
-    def __init__(self, ids: list[str], age: np.ndarray, amh: np.ndarray | None, labels: np.ndarray):
-        self.uses_amh = amh is not None
-        x = design(age, amh)
-        self.beta, self.cov = fit_logistic(x, labels)
-        self.n = int(len(labels))
-        self.age_range = (float(age.min()), float(age.max()))
-        self.amh_range = (float(amh.min()), float(amh.max())) if amh is not None else None
-        self.reference = x.mean(axis=0)
-        aucs, briers = [], []
-        for repeat in range(CV_REPEATS):
-            folds = np.array(assign_folds(ids, labels.tolist(), CV_FOLDS, seed=f"predict-cv-{repeat}"))
-            oof = np.zeros(self.n)
-            for f in range(CV_FOLDS):
-                train = folds != f
-                beta, _ = fit_logistic(x[train], labels[train])
-                oof[~train] = 1 / (1 + np.exp(-(x[~train] @ beta)))
-            aucs.append(auc(oof, labels))
-            briers.append(float(np.mean((oof - labels) ** 2)))
-        self.cv_auc, self.cv_brier = float(np.mean(aucs)), float(np.mean(briers))
-        self.base_rate = float(labels.mean())
-        self.base_brier = float(np.mean((self.base_rate - labels) ** 2))
-
-    def predict(self, age: float, amh: float | None) -> dict:
-        x = design(np.array([age]), None if amh is None else np.array([amh]))[0]
-        logit = float(x @ self.beta)
-        se = float(math.sqrt(x @ self.cov @ x))
-        expit = lambda z: 1 / (1 + math.exp(-z))
-        terms = [("女方年龄（含年龄²）", float((x[1:3] - self.reference[1:3]) @ self.beta[1:3]))]
-        if self.uses_amh:
-            terms.append(("AMH（log）", float((x[3] - self.reference[3]) * self.beta[3])))
-        return {"point": expit(logit), "low": expit(logit - Z95 * se), "high": expit(logit + Z95 * se), "terms": terms}
+def _design(raw: np.ndarray, means: np.ndarray) -> np.ndarray:
+    filled = np.where(np.isnan(raw), means, raw)
+    return np.column_stack([np.ones(len(filled)), filled])
 
 
-class OutcomePredictor:
-    def __init__(self, training: TrainingSet, *, exclude_case: str | None = None, k_folds: int = 5):
-        training, self.scope = training.visible(exclude_case, k_folds)
-        age, amh, y = training.matrix[:, AGE], training.matrix[:, AMH], training.labels
-        has_age, has_both = ~np.isnan(age), ~np.isnan(age) & ~np.isnan(amh)
-        ids = training.case_ids
-        self.with_amh = _Model([c for c, k in zip(ids, has_both) if k], age[has_both], amh[has_both], y[has_both])
-        self.age_only = _Model([c for c, k in zip(ids, has_age) if k], age[has_age], None, y[has_age])
+def train_model(training: TrainingSet, *, scope: str = "全部训练病例") -> dict:
+    raw = np.column_stack([training.matrix[:, FEATURE_NAMES.index(column)] for _, column, _ in FEATURES])
+    y = training.labels
+    means = np.nanmean(raw, axis=0)
+    beta, cov = fit_logistic(_design(raw, means), y)
+    aucs, briers = [], []
+    for repeat in range(CV_REPEATS):  # means and coefficients refitted inside each training fold
+        folds = np.array(assign_folds(training.case_ids, y.tolist(), CV_FOLDS, seed=f"predict-cv-{repeat}"))
+        oof = np.zeros(len(y))
+        for f in range(CV_FOLDS):
+            train = folds != f
+            fold_means = np.nanmean(raw[train], axis=0)
+            b, _ = fit_logistic(_design(raw[train], fold_means), y[train])
+            oof[~train] = 1 / (1 + np.exp(-(_design(raw[~train], fold_means) @ b)))
+        aucs.append(auc(oof, y))
+        briers.append(float(np.mean((oof - y) ** 2)))
+    names = [name for name, _, _ in FEATURES]
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "model": "logistic_regression",
+        "features": [{"name": name, "column": column} for name, column, _ in FEATURES],
+        "coefficients": dict(zip(["intercept", *names], beta.round(10).tolist())),
+        "covariance": cov.round(12).tolist(),
+        "imputation_means": dict(zip(names, means.round(10).tolist())),
+        "training": {
+            "scope": scope, "n": int(len(y)), "positives": int(y.sum()),
+            "missing": {name: int(np.isnan(raw[:, i]).sum()) for i, name in enumerate(names)},
+            "observed_range": {name: [float(np.nanmin(raw[:, i])), float(np.nanmax(raw[:, i]))]
+                               for i, name in enumerate(names)},
+            "cv_auc": round(float(np.mean(aucs)), 4), "cv_brier": round(float(np.mean(briers)), 4),
+            "base_rate_brier": round(float(np.mean((y.mean() - y) ** 2)), 4),
+            "cv": f"{CV_REPEATS} x {CV_FOLDS}-fold, imputation means refitted per fold",
+        },
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+class Predictor:
+    def __init__(self, artifact: dict):
+        if artifact.get("artifact_version") != ARTIFACT_VERSION or artifact.get("model") != "logistic_regression":
+            raise ValueError("Unsupported model artifact")
+        names = [name for name, _, _ in FEATURES]
+        if [f["name"] for f in artifact["features"]] != names:
+            raise ValueError("Model artifact features do not match this predictor")
+        self.beta = np.array([artifact["coefficients"][k] for k in ("intercept", *names)])
+        self.cov = np.array(artifact["covariance"])
+        self.means = np.array([artifact["imputation_means"][n] for n in names])
+        self.training = artifact["training"]
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "Predictor":
+        return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def query(self, arguments: dict) -> dict:
-        unknown = set(arguments) - {"age", "amh"}
+        names = [name for name, _, _ in FEATURES]
+        unknown = set(arguments) - set(names)
         if unknown:
-            raise InputError(f"不支持的参数：{'、'.join(sorted(unknown))}；只接受 age 和 amh")
-        age = number_argument(arguments, "age", 18, 55)
-        amh = number_argument(arguments, "amh", 0, 50, required=False)
-        model = self.with_amh if amh is not None else self.age_only
-        inputs = {"age": age, **({"amh": amh} if amh is not None else {})}
-        out_of_range = []
-        if not model.age_range[0] <= age <= model.age_range[1]:
-            out_of_range.append(f"年龄 {age:g} 超出训练数据范围 {model.age_range[0]:g}–{model.age_range[1]:g} 岁")
-        if amh is not None and amh > model.amh_range[1]:
-            out_of_range.append(f"AMH {amh:g} 超出训练数据上限 {model.amh_range[1]:g} ng/mL")
-        if out_of_range:
-            return {"输入": inputs, "拒绝预测": True, "原因": "；".join(out_of_range) + "，模型不外推"}
-        result = model.predict(age, amh)
-        notes = []
-        if amh is None:
-            notes.append("未提供 AMH，使用仅含年龄的模型")
-        elif amh < AMH_FLOOR:
-            notes.append(f"AMH 低于 {AMH_FLOOR} ng/mL，按 {AMH_FLOOR} 计算（可能为检测下限）")
-        return {
-            "输入": inputs, "拒绝预测": False,
-            "预测结局": "本次移植的临床妊娠概率",
-            "概率": round(result["point"], 3),
-            "95%置信区间": [round(result["low"], 3), round(result["high"], 3)],
-            "区间含义": "模型系数估计的不确定性，不是该患者个体结局的范围",
-            "各因素作用（相对训练集平均患者的对数几率，正为升高）": [
-                {"因素": name, "作用": "升高" if value > 0 else "降低", "对数几率": round(value, 3)}
-                for name, value in result["terms"]],
-            "模型卡片": {
-                "模型": "逻辑回归：年龄、年龄²、log(AMH)" if model.uses_amh else "逻辑回归：年龄、年龄²",
-                "训练范围": self.scope, "训练样本数": model.n,
-                "交叉验证AUC": round(model.cv_auc, 3),
-                "交叉验证Brier": round(model.cv_brier, 4),
-                "按总体妊娠率预测的Brier（对照）": round(model.base_brier, 4),
-                "本模型训练样本妊娠率": round(model.base_rate, 3),
-                "适用范围": f"年龄 {model.age_range[0]:g}–{model.age_range[1]:g} 岁"
-                            + (f"，AMH ≤ {model.amh_range[1]:g} ng/mL" if model.uses_amh else ""),
-                "数据处理": "结局回填值和异常值按结局盲规则还原为缺失"},
-            **({"备注": notes} if notes else {}),
-            "说明": "模型区分能力有限（交叉验证 AUC 约 0.6），只能作为参考；未纳入胚胎、内膜、男方等因素；"
-                  "对数几率是模型权重，不代表因果。",
-        }
+            raise InputError(f"不支持的参数：{'、'.join(sorted(unknown))}；只接受 {', '.join(names)}")
+        values = [number_argument(arguments, name, *bounds, required=False) for name, _, bounds in FEATURES]
+        if all(v is None for v in values):
+            raise InputError(f"至少提供 {', '.join(names)} 中的一个")
+        x = np.array([1.0, *[m if v is None else v for v, m in zip(values, self.means)]])
+        logit = float(x @ self.beta)
+        half = Z95 * math.sqrt(float(x @ self.cov @ x))
+        expit = lambda z: 1 / (1 + math.exp(-z))
+        return {"妊娠概率": round(expit(logit), 3), "95%置信区间": [round(expit(logit - half), 3), round(expit(logit + half), 3)]}
 
 
-def tool_spec(base_url: str = "http://127.0.0.1:9201") -> dict:
+def tool_spec(base_url: str = "http://127.0.0.1:9202") -> dict:
     return {
         "name": "ivf_predict_outcome",
-        "description": "用去泄露训练集上的逻辑回归（年龄、年龄²、log AMH）预测当前患者本次移植的临床妊娠概率，"
-                       "返回概率、95% 置信区间、年龄与 AMH 各自的作用和模型卡片（交叉验证 AUC、Brier）。"
-                       "不提供 AMH 时只用年龄；输入超出训练数据范围时拒绝预测。模型区分能力有限，作为参考。",
+        "description": "预测当前患者本次移植的临床妊娠概率及 95% 置信区间。模型为逻辑回归，只使用女方年龄、AMH、"
+                       "Gn 用药总天数三项；未提供的指标按训练集均值代替。模型区分能力有限（交叉验证 AUC 约 0.6），"
+                       "置信区间只反映模型系数的不确定性，不是个体结局的范围。",
         "input_schema": {
             "type": "object",
             "properties": {
-                "age": {"type": "number", "description": "当前患者女方年龄（岁）"},
-                "amh": {"type": "number", "description": "当前患者女方 AMH（ng/mL）；未检查可不填"},
+                "age": {"type": "number", "description": "女方年龄（岁）"},
+                "amh": {"type": "number", "description": "女方 AMH（ng/mL）"},
+                "gn_days": {"type": "number", "description": "女方 Gn 用药总天数（天）"},
             },
-            "required": ["age"],
+            "required": [],
             "additionalProperties": False,
         },
-        "backend": {"type": "http", "service": "ivf_clinical", "url": f"{base_url}/ivf/predict_outcome",
+        "backend": {"type": "http", "service": "ivf_predict", "url": f"{base_url}/ivf/predict_outcome",
                     "method": "POST"},
     }

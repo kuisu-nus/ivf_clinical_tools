@@ -1,0 +1,85 @@
+{
+  "artifact_version": 1,
+  "model": "logistic_regression",
+  "features": [
+    {
+      "name": "age",
+      "column": "女方年龄"
+    },
+    {
+      "name": "amh",
+      "column": "女方AMH"
+    },
+    {
+      "name": "gn_days",
+      "column": "女方用药Gn总天数"
+    }
+  ],
+  "coefficients": {
+    "intercept": -0.817328302,
+    "age": -0.0558521132,
+    "amh": 0.0230337018,
+    "gn_days": 0.1966174997
+  },
+  "covariance": [
+    [
+      0.444393504361,
+      -0.006697685337,
+      -0.002480513042,
+      -0.022525723959
+    ],
+    [
+      -0.006697685337,
+      0.000213424299,
+      5.3880389e-05,
+      5.25316e-06
+    ],
+    [
+      -0.002480513042,
+      5.3880389e-05,
+      0.000385473059,
+      -5.3482272e-05
+    ],
+    [
+      -0.022525723959,
+      5.25316e-06,
+      -5.3482272e-05,
+      0.002217393473
+    ]
+  ],
+  "imputation_means": {
+    "age": 30.5044169611,
+    "amh": 3.5333534928,
+    "gn_days": 10.093639576
+  },
+  "training": {
+    "scope": "全部训练病例",
+    "n": 1132,
+    "positives": 444,
+    "missing": {
+      "age": 0,
+      "amh": 87,
+      "gn_days": 0
+    },
+    "observed_range": {
+      "age": [
+        19.0,
+        46.0
+      ],
+      "amh": [
+        0.02,
+        30.8
+      ],
+      "gn_days": [
+        8.0,
+        12.0
+      ]
+    },
+    "cv_auc": 0.5939,
+    "cv_brier": 0.2323,
+    "base_rate_brier": 0.2384,
+    "cv": "5 x 5-fold, imputation means refitted per fold",
+    "data_sha256": "0df2b8866692fe2bfaa86e4ff27a725aaa49dcd541a7291014a268ce009410e9"
+  },
+  "created_utc": "2026-10-20T07:55:19+00:00"
+}
