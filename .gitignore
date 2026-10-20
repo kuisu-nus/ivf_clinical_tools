@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+# Patient-level data and per-run outputs stay local
+*.csv
+*.xlsx
+*.pkl
+data/
+outputs/
+task/services/data/
+trace/
+dispatches.jsonl
+.mcp.json

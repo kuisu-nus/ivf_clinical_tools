@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ivf-clinical": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["<仓库绝对路径>/task/runtime/claw_tools_mcp.py"],
+      "env": {
+        "OMNI_MCP_SERVER_NAME": "ivf-clinical",
+        "OMNI_TOOL_SPECS_DIR": "<仓库绝对路径>/task/tools",
+        "OMNI_TRACE_DIR": "<仓库绝对路径>/outputs/ivf_tool_trace"
+      }
+    }
+  }
+}

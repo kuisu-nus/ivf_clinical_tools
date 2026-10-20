@@ -1,75 +1,44 @@
 #!/usr/bin/env bash
+# Start the IVF clinical tools HTTP service and wait until /health answers.
+#   IVF_TRAIN_CSV     training CSV (1132 cases; never the sealed test set). Not in the repo.
+#                     Default inside the task container: /tmp/omni_services/data/train_clean.csv
+#   IVF_TOOLS_PORT    default 9201 (must match task/tools/*.json)
+#   IVF_EXCLUDE_CASE  training case under evaluation; its fold is hidden from the tool (agentic RL)
+#   PYTHON            default python3
 set -euo pipefail
-mkdir -p /tmp/omni_task
+if [ -d /tmp/omni_services/clinical_tools ]; then
+  SERVICES_DIR=/tmp/omni_services            # task container layout (task.json file mapping)
+else
+  SERVICES_DIR="$(cd "$(dirname "$0")/../services" && pwd)"   # repository checkout
+fi
+TASK_DIR="${OMNI_TASK_DIR:-/tmp/omni_task}"
+PORT="${IVF_TOOLS_PORT:-9201}"
+PYTHON="${PYTHON:-python3}"
+export IVF_TRAIN_CSV="${IVF_TRAIN_CSV:-/tmp/omni_services/data/train_clean.csv}"
+[ -f "$IVF_TRAIN_CSV" ] || { echo "training CSV not found: $IVF_TRAIN_CSV (set IVF_TRAIN_CSV)" >&2; exit 1; }
+mkdir -p "$TASK_DIR"
 
-# start service: config
 (
-  export PYTHONPATH="/tmp/omni_services/python_deps:/tmp/omni_services"
-  export CONFIG_FIXTURES="/tmp/omni_services/service_fixtures/fixtures/config/integrations.json"
-  export MOCK_TODAY="2026-03-25"
-  export PORT=9111
-  exec nohup python3 /tmp/omni_services/mock_services/config/server.py
-) > /tmp/omni_task/service-config.log 2>&1 &
+  export PYTHONPATH="$SERVICES_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  export IVF_TOOLS_PORT="$PORT"
+  exec nohup "$PYTHON" -m clinical_tools.service
+) > "$TASK_DIR/service-ivf_clinical.log" 2>&1 &
 pid=$!
-echo "$pid" > /tmp/omni_task/service-config.pid
+echo "$pid" > "$TASK_DIR/service-ivf_clinical.pid"
 disown "$pid" 2>/dev/null || true
 
-# start service: helpdesk
-(
-  export PYTHONPATH="/tmp/omni_services/python_deps:/tmp/omni_services"
-  export HELPDESK_FIXTURES="/tmp/omni_services/service_fixtures/fixtures/helpdesk/tickets.json"
-  export MOCK_TODAY="2026-03-25"
-  export PORT=9107
-  exec nohup python3 /tmp/omni_services/mock_services/helpdesk/server.py
-) > /tmp/omni_task/service-helpdesk.log 2>&1 &
-pid=$!
-echo "$pid" > /tmp/omni_task/service-helpdesk.pid
-disown "$pid" 2>/dev/null || true
-
-# start service: contacts
-(
-  export PYTHONPATH="/tmp/omni_services/python_deps:/tmp/omni_services"
-  export CONTACTS_FIXTURES="/tmp/omni_services/service_fixtures/fixtures/contacts/contacts.json"
-  export MOCK_TODAY="2026-03-25"
-  export PORT=9103
-  exec nohup python3 /tmp/omni_services/mock_services/contacts/server.py
-) > /tmp/omni_task/service-contacts.log 2>&1 &
-pid=$!
-echo "$pid" > /tmp/omni_task/service-contacts.pid
-disown "$pid" 2>/dev/null || true
-
-python3 - <<'PY'
-import time, urllib.request, json, sys
-checks = [
-    ("config", "http://localhost:9111/config/integrations", "POST", 10),
-    ("helpdesk", "http://localhost:9107/helpdesk/tickets", "POST", 10),
-    ("contacts", "http://localhost:9103/contacts/search", "POST", 10),
-]
-from urllib.error import HTTPError, URLError
-for name, url, method, ready_timeout in checks:
-    deadline = time.time() + ready_timeout
-    body = b'{}' if method == 'POST' else None
-    headers = {'Content-Type': 'application/json'} if body is not None else {}
-    last_err = None
-    ok = False
-    while time.time() < deadline:
-        try:
-            req = urllib.request.Request(url, data=body, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=2) as resp:
-                if resp.status < 500:
-                    ok = True
-                    break
-        except HTTPError as exc:
-            # 4xx means the HTTP server is up but rejected the probe body — treat as ready.
-            if exc.code < 500:
-                ok = True
-                break
-            last_err = exc
-            time.sleep(0.2)
-        except (URLError, ConnectionError, OSError) as exc:
-            last_err = exc
-            time.sleep(0.2)
-    if not ok:
-        sys.stderr.write(f'service {name} did not become ready: {last_err}\n')
-        sys.exit(1)
+"$PYTHON" - "$PORT" <<'PY'
+import sys, time, urllib.request
+url = f"http://127.0.0.1:{sys.argv[1]}/health"
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+deadline = time.time() + 60
+while time.time() < deadline:
+    try:
+        with opener.open(url, timeout=2) as resp:
+            print(resp.read().decode("utf-8"))
+            sys.exit(0)
+    except OSError:
+        time.sleep(0.5)
+sys.stderr.write(f"service ivf_clinical did not become ready at {url}\n")
+sys.exit(1)
 PY
