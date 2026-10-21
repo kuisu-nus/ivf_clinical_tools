@@ -158,16 +158,18 @@ curl -X POST http://127.0.0.1:9202/ivf/predict_outcome -H 'Content-Type: applica
 bash task/scripts/stop_services.sh
 ```
 
-Windows（在仓库根目录开两个 PowerShell 窗口，各运行一个服务；环境变量只对当前窗口有效）：
+Windows 一键启动（PowerShell 5.1 或 7，在仓库根目录运行；服务在后台运行，关掉终端也不停）：
 
 ```powershell
-# 窗口 1：相似患者检索（9201）
-$env:IVF_TRAIN_CSV = "outputs\clean_v1\train_clean.csv"; $env:IVF_LOG_DIR = "outputs\logs"
-python task\services\ivf_services\similar\server.py
-# 窗口 2：妊娠预测（9202），默认读取 task\services\models\lr_35_indicators.json
-$env:IVF_LOG_DIR = "outputs\logs"
-python task\services\ivf_services\predict\server.py
+# 默认读取 outputs\clean_v1\train_clean.csv，也可用 -TrainCsv 指定
+powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1
+# 局域网内的其他电脑访问：加 -Lan（监听 0.0.0.0），结束时会打印可访问的地址
+powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1 -Lan
+# 停止
+powershell -ExecutionPolicy Bypass -File task\scripts\stop_services.ps1
 ```
+
+服务日志在 `outputs\logs`，进程输出和进程号在 `outputs\run`。启动失败时脚本会显示错误日志的最后几行。
 
 ### 接入 Claude Code
 
