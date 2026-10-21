@@ -457,7 +457,8 @@ class LiveServiceTests(ServiceEnv):
                  "params": {"name": "ivf_predict_outcome", "arguments": {"age": 80}}},
             ]
             out = subprocess.run([sys.executable, str(TASK / "runtime" / "claw_tools_mcp.py")], env=env, timeout=60,
-                                 input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True)
+                                 input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True,
+                                 encoding="utf-8")   # the bridge speaks UTF-8; Windows defaults to GBK
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
             self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]],
                              ["ivf_predict_outcome", "ivf_similar_patients"])
@@ -465,7 +466,7 @@ class LiveServiceTests(ServiceEnv):
             self.assertIn("妊娠概率", json.loads(replies[4]["result"]["content"][0]["text"]))
             self.assertTrue(replies[5]["result"]["isError"])
             self.assertIn("参数校验失败", replies[5]["result"]["content"][0]["text"])
-            trace = [json.loads(line) for line in (Path(tmp) / "trace" / "dispatches.jsonl").read_text().splitlines()]
+            trace = [json.loads(line) for line in (Path(tmp) / "trace" / "dispatches.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual([t["tool_name"] for t in trace],
                              ["ivf_similar_patients", "ivf_predict_outcome", "ivf_predict_outcome"])
 
