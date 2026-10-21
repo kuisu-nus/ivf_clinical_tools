@@ -60,8 +60,10 @@ tasks/<task_id>/
 │   │   │   ├── cleaning.py          #   结局盲清洗（去泄露、去异常值）
 │   │   │   ├── similar.py           #   相似患者检索：可替换的检索策略 + 统一的门槛与统计
 │   │   │   ├── predict.py           #   逻辑回归：train_model（35 项训练）与 Predictor（三项输入预测）
-│   │   │   └── train_predictor.py   #   训练脚本：训练数据 → 模型文件
-│   │   └── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
+│   │   │   ├── train_predictor.py   #   训练脚本：训练数据 → 模型文件
+│   │   │   └── public_data.py       #   生成仓库中的训练集（只保留三项输入）
+│   │   ├── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
+│   │   └── data/train_age_amh_gn.csv     # 训练集：只保留年龄、AMH、Gn 天数，其余指标为均值（clinical_tools/public_data.py 生成）
 │   └── runtime/                     # claw_tools_mcp.py、gen_trace.py、patch_llm_judge.py（模板原样）、system_prompt_prefix.txt
 ├── grader/                          # 模板打分框架原样；grader.py 中只替换了 GRADING_SPEC
 ├── tests/test_clinical_tools.py     # 单元测试（合成数据）
@@ -74,7 +76,7 @@ tasks/<task_id>/
 ### 数据
 
 - 甘肃省妇幼保健院 IVF-ET 公开数据（Mendeley x5s3ky9cpv），患者级 1415 例；**只使用训练集 1132 例**，283 例封存测试集不进入任何工具和模型训练。
-- 病例数据不在仓库中。相似患者服务通过 `IVF_TRAIN_CSV` 读取；任务容器内默认路径 `/tmp/omni_services/data/train_clean.csv`。
+- 仓库中的训练集 `task/services/data/train_age_amh_gn.csv`：上述公开数据的 1132 例训练集清洗后，每例只保留女方年龄、AMH、Gn 用药天数的真实值，其余 32 项指标一律填训练集均值（由 `python -m clinical_tools.public_data` 生成）。相似患者检索只用年龄、AMH 和结局，所以结果与完整数据完全一致（已逐一核对 990 种查询）；`extra_fields` 请求的其他指标在这份数据上都是均值。两个启动脚本默认读取它，也可用 `IVF_TRAIN_CSV` 换成完整数据。
 - 结局盲清洗（规则不读标签）：`python -m clinical_tools.cleaning --input <训练集CSV> --out-dir <新目录>`
   - 去泄露：18 列按结局回填的类别均值（如 AMH 3.11/3.39、空腹血糖 5.05/5.04、男方PR 28.63/29.11），无论结局一律置为缺失；
   - 异常值：精液常规全为 0、男方血肌酐 <20（疑似尿素）、PRL>200、血细胞压积 >60、百分比超出 0–100，置为缺失；
@@ -145,10 +147,10 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 
 ```bash
 pip install -r requirements.txt   # numpy、fastapi、pydantic、uvicorn
-# 1. 清洗训练集（只需一次）
+# 1.（可选）想用完整数据时：清洗原始训练集，启动时用 IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv 指定
 PYTHONPATH=task/services python -m clinical_tools.cleaning --input xgb_train_1132.csv --out-dir outputs/clean_v1
-# 2. 分别启动两个服务（模型文件默认用 task/services/models/lr_35_indicators.json）
-IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv bash task/scripts/start_services.sh
+# 2. 一键启动两个服务（默认读取仓库中的训练集和模型文件；局域网访问加 IVF_TOOLS_HOST=0.0.0.0）
+bash task/scripts/start_services.sh
 # 3. URL 测试
 curl -X POST http://127.0.0.1:9201/ivf/similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
 curl -X POST http://127.0.0.1:9202/ivf/predict_outcome -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9, "gn_days": 10}'
@@ -161,7 +163,7 @@ bash task/scripts/stop_services.sh
 Windows 一键启动（PowerShell 5.1 或 7，在仓库根目录运行；服务在后台运行，关掉终端也不停）：
 
 ```powershell
-# 默认读取 outputs\clean_v1\train_clean.csv，也可用 -TrainCsv 指定
+# 默认读取仓库中的 task\services\data\train_age_amh_gn.csv，也可用 -TrainCsv 指定
 powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1
 # 局域网内的其他电脑访问：加 -Lan（监听 0.0.0.0），结束时会打印可访问的地址
 powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1 -Lan
@@ -196,6 +198,7 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 - 相似检索：拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折、`extra_fields`、新增一个检索策略类即可被服务使用。
 - 预测：逻辑回归能恢复已知系数、AUC 与成对定义一致、模型文件只含汇总量、输出只有概率和置信区间、其余指标与缺失输入用训练均值、训练脚本不覆盖已有模型、删除训练数据后仍能预测。
 - 服务：Pydantic 校验（缺参数、类型、范围、未知参数、未知策略和指标、非法 JSON）返回 422；audit/reset/health；每个服务只提供自己的端点；请求和调用写入日志、日志文件按大小滚动；40 个并发请求压向一个慢速、上限很小的服务时，超出部分返回 429，工作线程不超过上限，服务保持可用。
+- 仓库中的训练集：列与原数据一致、只有三项输入逐例不同、其余为均值；相似检索结果与文档中的数字一致（23 例、17.4%）。
 - 工具规格与 system prompt 与请求模型一致、端口正确；MCP 桥接调用两个服务，参数错误时返回 isError。
 
 ## Results

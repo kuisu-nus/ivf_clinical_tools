@@ -5,7 +5,7 @@
 #   powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1 -Lan     # reachable from the LAN
 #   powershell -ExecutionPolicy Bypass -File task\scripts\stop_services.ps1
 #
-# -TrainCsv  cleaned training CSV (default: $env:IVF_TRAIN_CSV, else outputs\clean_v1\train_clean.csv)
+# -TrainCsv  training CSV (default: $env:IVF_TRAIN_CSV, else task\services\data\train_age_amh_gn.csv)
 # -Model     model artifact (default: task\services\models\lr_35_indicators.json)
 # -Lan       listen on all interfaces (0.0.0.0) instead of 127.0.0.1 and print the LAN addresses
 # Logs: outputs\logs (service logs, rotated) and outputs\run (stdout/stderr, process ids).
@@ -37,7 +37,7 @@ if (-not $Python) { Fail "Python 3.10 or newer not found (tried py, python, pyth
 & $Python -c "import numpy, fastapi, pydantic, uvicorn" 2>$null
 if ($LASTEXITCODE -ne 0) { Fail "missing packages: `"$Python`" -m pip install -r requirements.txt" }
 
-if (-not $TrainCsv) { $TrainCsv = Join-Path $Root "outputs/clean_v1/train_clean.csv" }
+if (-not $TrainCsv) { $TrainCsv = Join-Path $Services "data/train_age_amh_gn.csv" }
 if (-not $Model) { $Model = Join-Path $Services "models/lr_35_indicators.json" }
 if (-not (Test-Path $TrainCsv)) { Fail "training CSV not found: $TrainCsv (use -TrainCsv)" }
 if (-not (Test-Path $Model)) { Fail "model artifact not found: $Model (use -Model)" }

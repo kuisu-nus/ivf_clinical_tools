@@ -85,9 +85,7 @@
     "runtime": "v4_shared"
   },
   "requirements": {
-    "env": [
-      "IVF_TRAIN_CSV"
-    ],
+    "env": [],
     "grader_env": [],
     "capabilities": [
       "llm_judge"
@@ -125,7 +123,7 @@
         "ready_timeout": 60,
         "env": {
           "PYTHONPATH": "/tmp/omni_services",
-          "IVF_TRAIN_CSV": "/tmp/omni_services/data/train_clean.csv",
+          "IVF_TRAIN_CSV": "/tmp/omni_services/data/train_age_amh_gn.csv",
           "IVF_SIMILAR_PORT": "9201",
           "IVF_LOG_DIR": "/tmp/omni_task/logs"
         }

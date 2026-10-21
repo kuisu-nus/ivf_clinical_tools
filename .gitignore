@@ -4,9 +4,11 @@ __pycache__/
 *.csv
 *.xlsx
 *.pkl
-data/
+/data/
 outputs/
-task/services/data/
+task/services/data/*
+# Shareable training file: public dataset, only age / AMH / Gn days per case (clinical_tools.public_data)
+!task/services/data/train_age_amh_gn.csv
 trace/
 dispatches.jsonl
 .mcp.json

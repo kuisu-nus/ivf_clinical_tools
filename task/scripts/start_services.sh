@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the two IVF tool services (FastAPI, one process each) and wait until both answer /health.
-#   similar patients  port ${IVF_SIMILAR_PORT:-9201}  needs IVF_TRAIN_CSV (cleaned training CSV, 1132 cases; not in the repo)
+#   similar patients  port ${IVF_SIMILAR_PORT:-9201}  reads IVF_TRAIN_CSV (default: services/data/train_age_amh_gn.csv, in the repo)
 #   pregnancy predict port ${IVF_PREDICT_PORT:-9202}  needs IVF_MODEL (default: services/models/lr_35_indicators.json)
 #   IVF_EXCLUDE_CASE  training case under evaluation; its fold is hidden from the similar-patient tool
 #   IVF_LOG_DIR       rotating service logs (default: $OMNI_TASK_DIR/logs); see services/ivf_services/_base.py
@@ -14,7 +14,7 @@ fi
 TASK_DIR="${OMNI_TASK_DIR:-/tmp/omni_task}"
 PYTHON="${PYTHON:-python3}"
 export IVF_SIMILAR_PORT="${IVF_SIMILAR_PORT:-9201}" IVF_PREDICT_PORT="${IVF_PREDICT_PORT:-9202}"
-export IVF_TRAIN_CSV="${IVF_TRAIN_CSV:-/tmp/omni_services/data/train_clean.csv}"
+export IVF_TRAIN_CSV="${IVF_TRAIN_CSV:-$SERVICES_DIR/data/train_age_amh_gn.csv}"
 export IVF_MODEL="${IVF_MODEL:-$SERVICES_DIR/models/lr_35_indicators.json}"
 export IVF_LOG_DIR="${IVF_LOG_DIR:-$TASK_DIR/logs}"
 export PYTHONPATH="$SERVICES_DIR${PYTHONPATH:+:$PYTHONPATH}"

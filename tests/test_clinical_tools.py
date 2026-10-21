@@ -21,7 +21,7 @@ os.environ.setdefault("IVF_LOG_LEVEL", "WARNING")       # keep test output quiet
 import uvicorn
 from fastapi.testclient import TestClient
 
-from clinical_tools import train_predictor
+from clinical_tools import public_data, train_predictor
 from clinical_tools.cleaning import clean_file, clean_matrix, load_training, rows_to_training
 from clinical_tools.common import FEATURE_NAMES
 from clinical_tools.predict import Predictor, auc, fit_logistic, train_model
@@ -255,6 +255,56 @@ class PredictorTests(unittest.TestCase):
     def test_excluding_a_case_retrains_without_its_fold(self):
         subset, scope = self.training.visible("0007")
         self.assertLess(train_model(subset, scope=scope)["training"]["n"], self.artifact["training"]["n"])
+
+
+class PublicDataTests(unittest.TestCase):
+    """task/services/data/train_age_amh_gn.csv: the shareable training file in the repository."""
+    PATH = TASK / "services" / "data" / "train_age_amh_gn.csv"
+
+    def test_committed_file_keeps_only_the_three_inputs(self):
+        with open(self.PATH, encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            self.assertEqual(reader.fieldnames, ["id", *FEATURE_NAMES, "label"])
+            rows = list(reader)
+        self.assertEqual(len(rows), 1132)
+        training = load_training(self.PATH)
+        for i, name in enumerate(FEATURE_NAMES):
+            column = training.matrix[:, i]
+            if name in public_data.KEPT:
+                self.assertGreater(len(np.unique(column[~np.isnan(column)])), 3, name)
+            else:
+                self.assertFalse(np.isnan(column).any(), name)            # a mean, not removed by cleaning
+                self.assertEqual(len(np.unique(column)), 1, name)
+
+    def test_tool_results_match_the_documented_numbers(self):
+        cohort = SimilarCohort(load_training(self.PATH))
+        result = cohort.query(Query(38, 0.9))
+        self.assertEqual((result["符合条件例数"], result["妊娠结局分布"]["临床妊娠"]), (23, 4))
+        self.assertEqual(result["妊娠结局分布"]["妊娠率"], 0.174)
+        self.assertEqual(result["妊娠结局分布"]["训练集总体妊娠率"], 0.392)
+        self.assertTrue(cohort.query(Query(44, 0.5))["拒绝统计"])
+        self.assertEqual(cohort.query(Query(44, 0.5, 2))["符合条件例数"], 15)
+
+    def test_build_keeps_inputs_exactly_and_fills_the_rest_with_means(self):
+        rows = synthetic_rows(1132)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "train.csv"
+            write_csv(source, rows)
+            built = public_data.build(source)
+        original = rows_to_training(rows)
+        self.assertEqual([r["id"] for r in built], original.case_ids)
+        self.assertEqual([int(r["label"]) for r in built], original.labels.tolist())
+        reloaded = rows_to_training(built)
+        for i, name in enumerate(FEATURE_NAMES):
+            if name in public_data.KEPT:
+                np.testing.assert_array_equal(reloaded.matrix[:, i], original.matrix[:, i])
+            else:
+                np.testing.assert_allclose(reloaded.matrix[:, i], np.nanmean(original.matrix[:, i]), atol=5e-5)
+        with tempfile.TemporaryDirectory() as tmp:
+            small = Path(tmp) / "small.csv"
+            write_csv(small, rows[:50])
+            with self.assertRaises(SystemExit):
+                public_data.build(small)
 
 
 class ServiceEnv(unittest.TestCase):
