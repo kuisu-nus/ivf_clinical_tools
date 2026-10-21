@@ -1,25 +1,36 @@
 import csv
 import json
+import logging
 import os
 import random
-import re
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 
+os.environ.setdefault("IVF_LOG_LEVEL", "WARNING")       # keep test output quiet; set before the services load
+
+import uvicorn
+from fastapi.testclient import TestClient
+
+from clinical_tools import train_predictor
 from clinical_tools.cleaning import clean_file, clean_matrix, load_training, rows_to_training
-from clinical_tools import predict_service, similar_service, train_predictor
-from clinical_tools.common import FEATURE_NAMES, InputError
+from clinical_tools.common import FEATURE_NAMES
 from clinical_tools.predict import Predictor, auc, fit_logistic, train_model
-from clinical_tools.similar import MIN_COHORT, SimilarCohort, amh_band
-from clinical_tools.specs import tool_specs, write_specs
+from clinical_tools.similar import (MIN_COHORT, STRATEGIES, AgeAmhBand, Query, Selection, SimilarCohort,
+                                    SimilarityStrategy, amh_band)
+from ivf_services import specs
+from ivf_services._base import ComputeGate, get_logger
+from ivf_services.predict import server as predict_server
+from ivf_services.similar import server as similar_server
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK = ROOT / "task"
@@ -86,6 +97,25 @@ class CleaningTests(unittest.TestCase):
                 clean_file(source, Path(tmp) / "out", expected_rows=50)
 
 
+def write_csv(path, rows):
+    with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+class AgeOnly(SimilarityStrategy):
+    """A second strategy, defined outside the service, to show that one class is all it takes."""
+    name, description = "age_only_test", "只按年龄 ±2 岁"
+
+    def select(self, cohort, query):
+        age = cohort.column("女方年龄")
+        searchable = ~np.isnan(age)
+        with np.errstate(invalid="ignore"):
+            matched = searchable & (np.abs(age - query.age) <= 2)
+        return Selection("女方年龄 ±2 岁", searchable, matched, np.abs(age - query.age), "无")
+
+
 class SimilarCohortTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -94,48 +124,68 @@ class SimilarCohortTests(unittest.TestCase):
         cls.cohort = SimilarCohort(cls.training)
 
     def test_statistics_match_a_manual_count(self):
-        result = self.cohort.query({"age": 30, "amh": 2.0})
+        result = self.cohort.query(Query(30, 2.0))
         age, amh = self.training.matrix[:, COL["女方年龄"]], self.training.matrix[:, COL["女方AMH"]]
         mask = (np.abs(age - 30) <= 1) & (amh >= 1.2) & (amh < 3.5)
         self.assertGreaterEqual(mask.sum(), MIN_COHORT)
         self.assertFalse(result["拒绝统计"])
+        self.assertEqual(result["检索策略"], "age_amh_band")
         self.assertEqual(result["符合条件例数"], int(mask.sum()))
         self.assertEqual(result["妊娠结局分布"]["临床妊娠"], int(self.training.labels[mask].sum()))
         self.assertEqual(len(result["相似患者"]), min(int(mask.sum()), 50))
         self.assertTrue(all(abs(p["女方年龄"] - 30) <= 1 for p in result["相似患者"]))
+        self.assertEqual(set(result["相似患者"][0]), {"女方年龄", "女方AMH", "妊娠结局"})
 
     def test_small_cohorts_are_refused_without_outcomes(self):
-        result = self.cohort.query({"age": 44, "amh": 0.15})
+        result = self.cohort.query(Query(44, 0.15))
         self.assertLess(result["符合条件例数"], MIN_COHORT)
         self.assertTrue(result["拒绝统计"])
         text = json.dumps(result, ensure_ascii=False)
         self.assertNotIn("妊娠结局分布", result)
         self.assertNotIn("相似患者", result)
         self.assertNotIn("未妊娠", text)
+        self.assertIn("放宽", result["建议"])
+        self.assertIn("最大年龄窗口", self.cohort.query(Query(54, 0.15, 3))["建议"])
 
     def test_ids_never_appear_and_row_order_does_not_matter(self):
-        result = self.cohort.query({"age": 30, "amh": 2.0})
+        result = self.cohort.query(Query(30, 2.0), extra_fields=["女方基础FSH"])
         text = json.dumps(result, ensure_ascii=False)
-        self.assertFalse(re.search(r"\b0\d{3}\b", text))
+        self.assertFalse([cid for cid in self.training.case_ids if f'"{cid}"' in text])
         shuffled = list(self.rows)
         random.Random(1).shuffle(shuffled)
-        self.assertEqual(SimilarCohort(rows_to_training(shuffled)).query({"age": 30, "amh": 2.0}), result)
+        again = SimilarCohort(rows_to_training(shuffled)).query(Query(30, 2.0), extra_fields=["女方基础FSH"])
+        self.assertEqual(again, result)
+
+    def test_extra_fields_are_listed_per_patient(self):
+        result = self.cohort.query(Query(30, 2.0), extra_fields=["女方基础FSH", "男方DFI", "女方基础FSH"])
+        first = result["相似患者"][0]
+        self.assertEqual(list(first), ["女方年龄", "女方AMH", "女方基础FSH", "男方DFI", "妊娠结局"])
+        # values come from the cleaned matrix; a cleaned-away value is null
+        self.assertTrue(all(p["女方基础FSH"] is None or isinstance(p["女方基础FSH"], float) for p in result["相似患者"]))
+        self.assertEqual(result["妊娠结局分布"], self.cohort.query(Query(30, 2.0))["妊娠结局分布"])
+
+    def test_a_new_strategy_plugs_in_without_touching_the_service(self):
+        STRATEGIES["age_only_test"] = AgeOnly()
+        try:
+            result = self.cohort.query(Query(30, 2.0), strategy="age_only_test")
+            age = self.training.matrix[:, COL["女方年龄"]]
+            self.assertEqual(result["符合条件例数"], int((np.abs(age - 30) <= 2).sum()))
+            self.assertEqual(result["相似人群临床信息"], {})
+        finally:
+            del STRATEGIES["age_only_test"]
 
     def test_excluding_a_case_hides_its_fold(self):
         hidden = SimilarCohort(self.training, exclude_case="0007")
         self.assertLess(len(hidden.labels), len(self.training.labels) * 0.85)
-        self.assertIn("排除当前病例", hidden.query({"age": 30, "amh": 2.0})["检索范围"])
+        self.assertIn("排除当前病例", hidden.query(Query(30, 2.0))["检索范围"])
         with self.assertRaises(ValueError):
             SimilarCohort(self.training, exclude_case="nope")
 
-    def test_bands_and_bad_arguments(self):
+    def test_bands(self):
         self.assertEqual(amh_band(1.2)[0], 1.2)
         self.assertEqual(amh_band(3.5)[0], 3.5)
         self.assertEqual(amh_band(1.19)[0], 0.0)
-        for bad in ({"age": 30}, {"age": "x", "amh": 1}, {"age": 30, "amh": -1}, {"age": 30, "amh": 1, "age_window": 4},
-                    {"age": True, "amh": 1}, {"age": 30, "amh": 1, "age_window": 1.5}):
-            with self.assertRaises(InputError):
-                self.cohort.query(bad)
+        self.assertIsInstance(STRATEGIES["age_amh_band"], AgeAmhBand)
 
 
 class PredictorTests(unittest.TestCase):
@@ -170,8 +220,8 @@ class PredictorTests(unittest.TestCase):
         self.assertFalse([cid for cid in self.training.case_ids if f'"{cid}"' in text])
 
     def test_output_is_only_probability_and_interval(self):
-        young = self.predictor.query({"age": 26, "amh": 2.0, "gn_days": 10})
-        old = self.predictor.query({"age": 43, "amh": 2.0, "gn_days": 10})
+        young = self.predictor.predict(age=26, amh=2.0, gn_days=10)
+        old = self.predictor.predict(age=43, amh=2.0, gn_days=10)
         for r in (young, old):
             self.assertEqual(set(r), {"妊娠概率", "95%置信区间"})
             self.assertLessEqual(r["95%置信区间"][0], r["妊娠概率"])
@@ -180,98 +230,219 @@ class PredictorTests(unittest.TestCase):
 
     def test_other_indicators_and_missing_inputs_use_training_means(self):
         means = dict(zip(self.artifact["features"], self.artifact["means"]))
-        self.assertEqual(self.predictor.query({"age": 33}),
-                         self.predictor.query({"age": 33, "amh": means["女方AMH"], "gn_days": means["女方用药Gn总天数"]}))
-        # with every input at its mean the logit is the intercept alone
-        at_means = self.predictor.query({"age": means["女方年龄"]})
+        self.assertEqual(self.predictor.predict(age=33),
+                         self.predictor.predict(age=33, amh=means["女方AMH"], gn_days=means["女方用药Gn总天数"]))
+        at_means = self.predictor.predict(age=means["女方年龄"])   # every input at its mean: the intercept alone
         self.assertAlmostEqual(at_means["妊娠概率"], 1 / (1 + np.exp(-self.artifact["intercept"])), places=3)
-        for bad in ({}, {"age": "x"}, {"age": 30, "fsh": 8}, {"age": 80}, {"gn_days": -1}):
-            with self.assertRaises(InputError):
-                self.predictor.query(bad)
+        for bad in ({}, {"age": None}, {"fsh": 8}):
+            with self.assertRaises(ValueError):
+                self.predictor.predict(**bad)
 
     def test_training_cli_writes_once_and_predictor_needs_only_the_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "train.csv"
-            rows = synthetic_rows()
-            with open(source, "w", encoding="utf-8-sig", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-                writer.writeheader()
-                writer.writerows(rows)
+            write_csv(source, synthetic_rows())
             out = Path(tmp) / "model.json"
             train_predictor.main(["--csv", str(source), "--out", str(out)])
             source.unlink()  # prediction must not need the training data
             loaded = Predictor.from_file(out)
-            self.assertEqual(loaded.query({"age": 30, "amh": 2, "gn_days": 10}),
-                             self.predictor.query({"age": 30, "amh": 2, "gn_days": 10}))
+            self.assertEqual(loaded.predict(age=30, amh=2, gn_days=10), self.predictor.predict(age=30, amh=2, gn_days=10))
             with self.assertRaises(SystemExit):
                 train_predictor.main(["--csv", str(source), "--out", str(out)])
-        bad = dict(self.artifact, inputs={"age": "女方年龄"})
         with self.assertRaises(ValueError):
-            Predictor(bad)
+            Predictor(dict(self.artifact, inputs={"age": "女方年龄"}))
 
     def test_excluding_a_case_retrains_without_its_fold(self):
         subset, scope = self.training.visible("0007")
         self.assertLess(train_model(subset, scope=scope)["training"]["n"], self.artifact["training"]["n"])
 
 
-class ServiceAndBridgeTests(unittest.TestCase):
+class ServiceEnv(unittest.TestCase):
+    """Training CSV and model artifact on disk, pointed to by the services' environment."""
+
     @classmethod
     def setUpClass(cls):
-        training = rows_to_training(synthetic_rows())
-        cls.similar_server, _ = similar_service.build(SimilarCohort(training), port=0)
-        cls.predict_server, _ = predict_service.build(Predictor(train_model(training)), port=0)
-        cls.similar_url = f"http://127.0.0.1:{cls.similar_server.server_address[1]}"
-        cls.predict_url = f"http://127.0.0.1:{cls.predict_server.server_address[1]}"
-        for server in (cls.similar_server, cls.predict_server):
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-        cls.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        cls.tmp = tempfile.TemporaryDirectory()
+        rows = synthetic_rows()
+        cls.csv = Path(cls.tmp.name) / "train.csv"
+        write_csv(cls.csv, rows)
+        cls.model = Path(cls.tmp.name) / "model.json"
+        cls.model.write_text(json.dumps(train_model(rows_to_training(rows))), encoding="utf-8")
+        cls.saved = {k: os.environ.get(k) for k in ("IVF_TRAIN_CSV", "IVF_MODEL", "IVF_EXCLUDE_CASE")}
+        os.environ.update(IVF_TRAIN_CSV=str(cls.csv), IVF_MODEL=str(cls.model))
+        os.environ.pop("IVF_EXCLUDE_CASE", None)
 
     @classmethod
     def tearDownClass(cls):
-        for server in (cls.similar_server, cls.predict_server):
-            server.shutdown()
-            server.server_close()
+        for key, value in cls.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        cls.tmp.cleanup()
 
-    def post(self, url, body):
-        request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                         headers={"Content-Type": "application/json"})
+
+class ApiTests(ServiceEnv):
+    def test_similar_endpoint_and_validation(self):
+        with TestClient(similar_server.app) as client:
+            client.post("/ivf/reset")
+            ok = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
+            self.assertEqual(ok.status_code, 200)
+            self.assertFalse(ok.json()["拒绝统计"])
+            for bad in ({"age": 30}, {"age": "x", "amh": 1}, {"age": 30, "amh": -1}, {"age": 30, "amh": 1, "age_window": 4},
+                        {"age": 30, "amh": 1, "age_window": 1.5}, {"age": 30, "amh": True}, {"age": 30, "amh": 1, "id": "0001"},
+                        {"age": 30, "amh": 1, "strategy": "nope"}, {"age": 30, "amh": 1, "extra_fields": ["label"]},
+                        {"age": 30, "amh": 1, "extra_fields": ["女方年龄"]}):
+                response = client.post("/ivf/similar_patients", json=bad)
+                self.assertEqual(response.status_code, 422, bad)
+                self.assertTrue(response.json()["message"].startswith("参数校验失败"))
+            self.assertEqual(client.post("/ivf/similar_patients", content=b"{not json",
+                                         headers={"Content-Type": "application/json"}).status_code, 422)
+            calls = client.get("/ivf/audit").json()["calls"]
+            self.assertEqual([c["status"] for c in calls][:2], [200, 422])
+            self.assertEqual(calls[0]["request_body"]["age"], 30)
+            health = client.get("/health").json()
+            self.assertEqual((health["status"], health["tool"], health["cases"]), ("ok", "ivf_similar_patients", 400))
+            self.assertEqual(client.post("/ivf/reset").json(), {"status": "reset"})
+            self.assertEqual(client.get("/ivf/audit").json()["calls"], [])
+
+    def test_a_registered_strategy_is_served_without_service_changes(self):
+        STRATEGIES["age_only_test"] = AgeOnly()
         try:
-            with self.opener.open(request, timeout=5) as response:
-                return response.status, json.loads(response.read())
-        except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read())
+            with TestClient(similar_server.app) as client:
+                body = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0, "strategy": "age_only_test"}).json()
+            self.assertEqual((body["检索策略"], body["筛选条件"]), ("age_only_test", "女方年龄 ±2 岁"))
+        finally:
+            del STRATEGIES["age_only_test"]
 
-    def get(self, url):
-        with self.opener.open(url, timeout=5) as response:
-            return json.loads(response.read())
+    def test_predict_endpoint_and_validation(self):
+        with TestClient(predict_server.app) as client:
+            ok = client.post("/ivf/predict_outcome", json={"age": 30, "amh": 2.0, "gn_days": 10})
+            self.assertEqual((ok.status_code, set(ok.json())), (200, {"妊娠概率", "95%置信区间"}))
+            self.assertEqual(client.post("/ivf/predict_outcome", json={"amh": 2.0}).status_code, 200)
+            for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True}):
+                self.assertEqual(client.post("/ivf/predict_outcome", json=bad).status_code, 422, bad)
+            self.assertEqual(client.get("/health").json()["tool"], "ivf_predict_outcome")
 
-    def test_two_independent_services(self):
-        status, body = self.post(self.similar_url + "/ivf/similar_patients", {"age": 30, "amh": 2.0})
-        self.assertEqual(status, 200)
-        self.assertFalse(body["拒绝统计"])
-        status, body = self.post(self.similar_url + "/ivf/similar_patients", {"age": 30})
-        self.assertEqual(status, 400)
-        status, body = self.post(self.predict_url + "/ivf/predict_outcome", {"age": 30, "amh": 2.0, "gn_days": 10})
-        self.assertEqual((status, set(body)), (200, {"妊娠概率", "95%置信区间"}))
-        # each service serves only its own tool
-        self.assertEqual(self.post(self.similar_url + "/ivf/predict_outcome", {"age": 30})[0], 404)
-        self.assertEqual(self.post(self.predict_url + "/ivf/similar_patients", {"age": 30, "amh": 2})[0], 404)
-        self.assertEqual(self.get(self.similar_url + "/health")["tool"], "ivf_similar_patients")
-        self.assertEqual(self.get(self.predict_url + "/health")["tool"], "ivf_predict_outcome")
-        self.assertEqual([c["status"] for c in self.get(self.similar_url + "/ivf/audit")["calls"]][-2:], [200, 400])
+    def test_each_service_serves_only_its_own_tool(self):
+        with TestClient(similar_server.app) as similar, TestClient(predict_server.app) as predict:
+            self.assertEqual(similar.post("/ivf/predict_outcome", json={"age": 30}).status_code, 404)
+            self.assertEqual(predict.post("/ivf/similar_patients", json={"age": 30, "amh": 2}).status_code, 404)
 
-    def test_specs_match_generator_and_use_api_safe_names(self):
-        for spec in tool_specs():
-            committed = json.loads((TASK / "tools" / f"{spec['name']}.json").read_text(encoding="utf-8"))
-            self.assertEqual(committed, spec)
-            for key in committed["input_schema"]["properties"]:
-                self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")
-        ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in tool_specs()}
-        self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202"})
+    def test_requests_and_calls_are_logged(self):
+        with TestClient(similar_server.app) as client, self.assertLogs("ivf.ivf_similar", level="INFO") as logs:
+            client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
+        text = "\n".join(logs.output)
+        self.assertRegex(text, r"POST /ivf/similar_patients -> 200 [\d.]+ms")
+        self.assertIn('call /ivf/similar_patients status=200 args={"age": 30.0, "amh": 2.0', text)
+        self.assertNotIn("未妊娠", text)        # results stay out of the log, only a summary
+
+    def test_log_files_rotate_in_the_log_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = {k: os.environ.get(k) for k in ("IVF_LOG_DIR", "IVF_LOG_MAX_BYTES", "IVF_LOG_BACKUPS")}
+            os.environ.update(IVF_LOG_DIR=tmp, IVF_LOG_MAX_BYTES="2000", IVF_LOG_BACKUPS="2")
+            try:
+                logger = get_logger("rotation_test")
+                logger.setLevel(logging.INFO)
+                for i in range(200):
+                    logger.info("line %d %s", i, "x" * 40)
+            finally:
+                for handler in list(logger.handlers):
+                    handler.close()
+                    logger.removeHandler(handler)
+                for key, value in saved.items():
+                    os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                             ["rotation_test.log", "rotation_test.log.1", "rotation_test.log.2"])
+
+
+class LiveServer:
+    """A service on a free port in a background thread (real HTTP, as the MCP bridge uses)."""
+
+    def __init__(self, app):
+        self.server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        deadline = time.time() + 20
+        while not self.server.started:
+            if time.time() > deadline:
+                raise RuntimeError("server did not start")
+            time.sleep(0.02)
+        self.url = f"http://127.0.0.1:{self.server.servers[0].sockets[0].getsockname()[1]}"
+        return self
+
+    def __exit__(self, *exc):
+        self.server.should_exit = True
+        self.thread.join(10)
+
+
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def post(url, body, timeout=30):
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with OPENER.open(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+class LiveServiceTests(ServiceEnv):
+    def test_a_flood_of_requests_is_bounded_and_the_service_stays_up(self):
+        kit, state = similar_server.kit, similar_server.app.state
+        original_gate = kit.gate
+        kit.gate = ComputeGate("flood", max_concurrency=2, max_pending=3)
+        release, worker_counts = threading.Event(), []
+
+        def held_query(*args, **kwargs):          # admitted work waits until every refusal has come back
+            worker_counts.append(sum(t.name.startswith("ivf-flood") for t in threading.enumerate()))
+            release.wait(30)
+            return state.real_query(*args, **kwargs)
+
+        try:
+            with LiveServer(similar_server.app) as live:
+                state.real_query, state.cohort.query = state.cohort.query, held_query
+                with ThreadPoolExecutor(max_workers=40) as pool:
+                    futures = [pool.submit(post, live.url + "/ivf/similar_patients", {"age": 30, "amh": 2.0})
+                               for _ in range(40)]
+                    deadline = time.time() + 30
+                    while sum(f.done() for f in futures) < 35 and time.time() < deadline:
+                        time.sleep(0.02)
+                    with OPENER.open(live.url + "/health", timeout=5) as response:
+                        health = json.loads(response.read())
+                    release.set()
+                    results = [f.result() for f in futures]
+                statuses = [s for s, _ in results]
+                self.assertEqual((statuses.count(200), statuses.count(429)), (5, 35))   # 2 running + 3 waiting
+                self.assertTrue(all(b["error"] == "busy" for s, b in results if s == 429))
+                self.assertEqual((health["status"], health["computations_in_flight"]), ("ok", 5))
+                self.assertLessEqual(max(worker_counts), 2)        # never more worker threads than the cap
+                del state.cohort.query
+                self.assertEqual(post(live.url + "/ivf/similar_patients", {"age": 30, "amh": 2.0})[0], 200)
+        finally:
+            release.set()
+            kit.gate.shutdown()
+            kit.gate = original_gate
+
+    def test_startup_failures_are_logged(self):
+        saved = os.environ["IVF_TRAIN_CSV"]
+        os.environ["IVF_TRAIN_CSV"] = str(Path(self.tmp.name) / "missing.csv")
+        try:
+            with self.assertLogs("ivf.ivf_similar", level="ERROR") as logs, self.assertRaises(FileNotFoundError):
+                with TestClient(similar_server.app):
+                    pass
+        finally:
+            os.environ["IVF_TRAIN_CSV"] = saved
+        self.assertIn("failed to start: could not load training data", "\n".join(logs.output))
 
     def test_mcp_bridge_lists_and_calls_both_tools(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            write_specs(Path(tmp) / "tools", self.similar_url, self.predict_url)
+        with LiveServer(similar_server.app) as similar, LiveServer(predict_server.app) as predict, \
+                tempfile.TemporaryDirectory() as tmp:
+            specs.write_specs(Path(tmp) / "tools", {"ivf_similar_patients": similar.url, "ivf_predict_outcome": predict.url})
             env = {**os.environ, "OMNI_TOOL_SPECS_DIR": str(Path(tmp) / "tools"),
                    "OMNI_TRACE_DIR": str(Path(tmp) / "trace"), "OMNI_MCP_SERVER_NAME": "ivf-clinical"}
             messages = [
@@ -282,16 +453,35 @@ class ServiceAndBridgeTests(unittest.TestCase):
                  "params": {"name": "ivf_similar_patients", "arguments": {"age": 44, "amh": 0.15}}},
                 {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                  "params": {"name": "ivf_predict_outcome", "arguments": {"age": 38, "amh": 0.9, "gn_days": 10}}},
+                {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                 "params": {"name": "ivf_predict_outcome", "arguments": {"age": 80}}},
             ]
-            out = subprocess.run([sys.executable, str(TASK / "runtime" / "claw_tools_mcp.py")], env=env, timeout=30,
+            out = subprocess.run([sys.executable, str(TASK / "runtime" / "claw_tools_mcp.py")], env=env, timeout=60,
                                  input="".join(json.dumps(m) + "\n" for m in messages), capture_output=True, text=True)
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
             self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]],
                              ["ivf_predict_outcome", "ivf_similar_patients"])
             self.assertTrue(json.loads(replies[3]["result"]["content"][0]["text"])["拒绝统计"])
             self.assertIn("妊娠概率", json.loads(replies[4]["result"]["content"][0]["text"]))
+            self.assertTrue(replies[5]["result"]["isError"])
+            self.assertIn("参数校验失败", replies[5]["result"]["content"][0]["text"])
             trace = [json.loads(line) for line in (Path(tmp) / "trace" / "dispatches.jsonl").read_text().splitlines()]
-            self.assertEqual([t["tool_name"] for t in trace], ["ivf_similar_patients", "ivf_predict_outcome"])
+            self.assertEqual([t["tool_name"] for t in trace],
+                             ["ivf_similar_patients", "ivf_predict_outcome", "ivf_predict_outcome"])
+
+
+class SpecTests(unittest.TestCase):
+    def test_committed_specs_and_prompt_match_the_request_models(self):
+        for spec in specs.tool_specs():
+            committed = json.loads((TASK / "tools" / f"{spec['name']}.json").read_text(encoding="utf-8"))
+            self.assertEqual(committed, spec)
+            for key in committed["input_schema"]["properties"]:
+                self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")   # Claude Code drops tools with other names
+        ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in specs.tool_specs()}
+        self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202"})
+        today = json.loads((ROOT / "task.json").read_text(encoding="utf-8"))["runtime"]["mock_today"]
+        self.assertEqual((TASK / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8"),
+                         specs.system_prompt_prefix(today))
 
 
 if __name__ == "__main__":

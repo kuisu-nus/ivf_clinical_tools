@@ -1,23 +1,78 @@
 {
   "name": "ivf_similar_patients",
-  "description": "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（年龄 ±age_window 岁、AMH 同一档：<1.2 / 1.2–3.5 / >3.5 ng/mL），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。符合条件少于 15 例时拒绝返回统计结果，只告知例数。",
+  "description": "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（默认策略：年龄 ±age_window 岁、AMH 同一档：<1.2 / 1.2–3.5 / >3.5 ng/mL），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。符合条件少于 15 例时拒绝返回统计结果，只告知例数。",
   "input_schema": {
     "type": "object",
     "properties": {
       "age": {
         "type": "number",
-        "description": "当前患者女方年龄（岁）"
+        "description": "当前患者女方年龄（岁）",
+        "minimum": 18,
+        "maximum": 55
       },
       "amh": {
         "type": "number",
-        "description": "当前患者女方 AMH（ng/mL）"
+        "description": "当前患者女方 AMH（ng/mL）",
+        "minimum": 0,
+        "maximum": 50
       },
       "age_window": {
         "type": "integer",
-        "minimum": 1,
-        "maximum": 3,
+        "description": "年龄上下浮动的岁数，默认 1",
         "default": 1,
-        "description": "年龄上下浮动的岁数，默认 1"
+        "minimum": 1,
+        "maximum": 3
+      },
+      "strategy": {
+        "type": "string",
+        "description": "检索策略。age_amh_band：女方年龄 ±age_window 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL）",
+        "enum": [
+          "age_amh_band"
+        ],
+        "default": "age_amh_band"
+      },
+      "extra_fields": {
+        "type": "array",
+        "description": "相似患者列表中除年龄、AMH、妊娠结局外额外返回的指标（中文指标名），默认不返回",
+        "items": {
+          "type": "string",
+          "enum": [
+            "女方基础FSH",
+            "女方基础PRL",
+            "女方基础T",
+            "女方基础P",
+            "女方白细胞计数",
+            "女方血小板",
+            "女方血细胞压积",
+            "女方凝血常规PT",
+            "女方凝血常规APPT",
+            "女方凝血常规TT",
+            "女方D二聚体",
+            "女方甲功TPO",
+            "女方空腹血糖",
+            "女方肾功尿酸",
+            "男方浓度",
+            "男方正常形态率",
+            "男方PR",
+            "男方NP",
+            "男方存活率",
+            "男方DFI",
+            "男方ALT",
+            "男方AST",
+            "男方血肌酐",
+            "男方白细胞",
+            "男方血小板",
+            "男方空腹血糖",
+            "女方用药Gn总天数",
+            "女方用药HCG日P",
+            "男方精液处理后NP",
+            "男方精液处理方法",
+            "男方精液处理后密度",
+            "男方精液处理后PR",
+            "男方精液处理后IM"
+          ]
+        },
+        "maxItems": 10
       }
     },
     "required": [
@@ -28,8 +83,8 @@
   },
   "backend": {
     "type": "http",
-    "service": "ivf_clinical",
-    "url": "http://127.0.0.1:9201/ivf/similar_patients",
-    "method": "POST"
+    "service": "ivf_similar",
+    "method": "POST",
+    "url": "http://127.0.0.1:9201/ivf/similar_patients"
   }
 }

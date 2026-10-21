@@ -1,29 +1,34 @@
 {
   "name": "ivf_predict_outcome",
-  "description": "预测当前患者本次移植的临床妊娠概率及 95% 置信区间。模型为在 35 项指标上训练的逻辑回归，预测时只接收女方年龄、AMH、Gn 用药总天数，其余指标及未提供的指标按训练集均值代替。模型区分能力有限（交叉验证 AUC 约 0.6），置信区间只反映模型系数的不确定性，不是个体结局的范围。",
+  "description": "预测当前患者本次移植的临床妊娠概率及 95% 置信区间。模型为在 35 项指标上训练的逻辑回归，预测时只接收女方年龄、AMH、Gn 用药总天数（至少提供一项），其余指标及未提供的指标按训练集均值代替。模型区分能力有限（交叉验证 AUC 约 0.6），置信区间只反映模型系数的不确定性，不是个体结局的范围。",
   "input_schema": {
     "type": "object",
     "properties": {
       "age": {
         "type": "number",
-        "description": "女方年龄（岁）"
+        "description": "女方年龄（岁）",
+        "minimum": 18,
+        "maximum": 55
       },
       "amh": {
         "type": "number",
-        "description": "女方 AMH（ng/mL）"
+        "description": "女方 AMH（ng/mL）",
+        "minimum": 0,
+        "maximum": 50
       },
       "gn_days": {
         "type": "number",
-        "description": "女方 Gn 用药总天数（天）"
+        "description": "女方 Gn 用药总天数（天）",
+        "minimum": 1,
+        "maximum": 30
       }
     },
-    "required": [],
     "additionalProperties": false
   },
   "backend": {
     "type": "http",
     "service": "ivf_predict",
-    "url": "http://127.0.0.1:9202/ivf/predict_outcome",
-    "method": "POST"
+    "method": "POST",
+    "url": "http://127.0.0.1:9202/ivf/predict_outcome"
   }
 }

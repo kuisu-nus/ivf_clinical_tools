@@ -23,10 +23,10 @@ from pathlib import Path
 import numpy as np
 
 from clinical_tools.cleaning import TrainingSet
-from clinical_tools.common import FEATURE_NAMES, InputError, assign_folds, number_argument
+from clinical_tools.common import FEATURE_NAMES, assign_folds
 
-# Prediction inputs: (argument name, training column, valid input range)
-INPUTS = (("age", "女方年龄", (18, 55)), ("amh", "女方AMH", (0, 50)), ("gn_days", "女方用药Gn总天数", (1, 30)))
+# Prediction inputs: argument name -> training column. Valid ranges are checked by the service.
+INPUTS = {"age": "女方年龄", "amh": "女方AMH", "gn_days": "女方用药Gn总天数"}
 C = 1.0                          # inverse L2 strength on standardised coefficients, as the project LR
 CV_FOLDS, CV_REPEATS = 5, 5
 Z95 = 1.959964
@@ -87,7 +87,7 @@ class _Standardiser:
 
 def train_model(training: TrainingSet, *, scope: str = "全部训练病例") -> dict:
     raw, y = training.matrix, training.labels
-    inputs = [FEATURE_NAMES.index(column) for _, column, _ in INPUTS]
+    inputs = [FEATURE_NAMES.index(column) for column in INPUTS.values()]
     standardiser = _Standardiser(raw)
     beta, cov = fit_logistic(standardiser.design(raw), y, ridge=1 / C)
     scores = {"all": ([], []), "inputs": ([], [])}
@@ -108,7 +108,7 @@ def train_model(training: TrainingSet, *, scope: str = "全部训练病例") -> 
         "artifact_version": ARTIFACT_VERSION,
         "model": "logistic_regression",
         "features": list(FEATURE_NAMES),
-        "inputs": {name: column for name, column, _ in INPUTS},
+        "inputs": dict(INPUTS),
         "means": standardiser.means.round(10).tolist(),
         "scales": standardiser.scales.round(10).tolist(),
         "intercept": round(float(beta[0]), 10),
@@ -130,7 +130,7 @@ class Predictor:
     def __init__(self, artifact: dict):
         if artifact.get("artifact_version") != ARTIFACT_VERSION or artifact.get("model") != "logistic_regression":
             raise ValueError("Unsupported model artifact")
-        if list(artifact["features"]) != list(FEATURE_NAMES) or artifact["inputs"] != {n: c for n, c, _ in INPUTS}:
+        if list(artifact["features"]) != list(FEATURE_NAMES) or artifact["inputs"] != INPUTS:
             raise ValueError("Model artifact features do not match this predictor")
         self.means = np.array(artifact["means"])
         self.scales = np.array(artifact["scales"])
@@ -142,41 +142,20 @@ class Predictor:
     def from_file(cls, path: str | Path) -> "Predictor":
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
-    def query(self, arguments: dict) -> dict:
-        names = [name for name, _, _ in INPUTS]
-        unknown = set(arguments) - set(names)
+    def predict(self, **values: float | None) -> dict:
+        """Probability and 95% interval; inputs not given, and every other indicator,
+        take their training means."""
+        unknown = set(values) - set(INPUTS)
         if unknown:
-            raise InputError(f"不支持的参数：{'、'.join(sorted(unknown))}；只接受 {', '.join(names)}")
-        values = [number_argument(arguments, name, *bounds, required=False) for name, _, bounds in INPUTS]
-        if all(v is None for v in values):
-            raise InputError(f"至少提供 {', '.join(names)} 中的一个")
+            raise ValueError(f"unsupported inputs: {sorted(unknown)}")
+        given = {name: v for name, v in values.items() if v is not None}
+        if not given:
+            raise ValueError(f"at least one of {list(INPUTS)} is required")
         raw = self.means.copy()
-        for (_, column, _), value in zip(INPUTS, values):
-            if value is not None:
-                raw[FEATURE_NAMES.index(column)] = value
+        for name, value in given.items():
+            raw[FEATURE_NAMES.index(INPUTS[name])] = value
         x = np.concatenate([[1.0], (raw - self.means) / self.scales])
         logit = float(x @ self.beta)
         half = Z95 * math.sqrt(float(x @ self.cov @ x))
         expit = lambda z: 1 / (1 + math.exp(-z))
         return {"妊娠概率": round(expit(logit), 3), "95%置信区间": [round(expit(logit - half), 3), round(expit(logit + half), 3)]}
-
-
-def tool_spec(base_url: str = "http://127.0.0.1:9202") -> dict:
-    return {
-        "name": "ivf_predict_outcome",
-        "description": "预测当前患者本次移植的临床妊娠概率及 95% 置信区间。模型为在 35 项指标上训练的逻辑回归，"
-                       "预测时只接收女方年龄、AMH、Gn 用药总天数，其余指标及未提供的指标按训练集均值代替。"
-                       "模型区分能力有限（交叉验证 AUC 约 0.6），置信区间只反映模型系数的不确定性，不是个体结局的范围。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "age": {"type": "number", "description": "女方年龄（岁）"},
-                "amh": {"type": "number", "description": "女方 AMH（ng/mL）"},
-                "gn_days": {"type": "number", "description": "女方 Gn 用药总天数（天）"},
-            },
-            "required": [],
-            "additionalProperties": False,
-        },
-        "backend": {"type": "http", "service": "ivf_predict", "url": f"{base_url}/ivf/predict_outcome",
-                    "method": "POST"},
-    }

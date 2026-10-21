@@ -118,7 +118,7 @@
     "services": [
       {
         "name": "ivf_similar",
-        "command": "python3 -m clinical_tools.similar_service",
+        "command": "python3 /tmp/omni_services/ivf_services/similar/server.py",
         "port": 9201,
         "health_check": "http://localhost:9201/health",
         "health_check_method": "GET",
@@ -126,12 +126,13 @@
         "env": {
           "PYTHONPATH": "/tmp/omni_services",
           "IVF_TRAIN_CSV": "/tmp/omni_services/data/train_clean.csv",
-          "IVF_SIMILAR_PORT": "9201"
+          "IVF_SIMILAR_PORT": "9201",
+          "IVF_LOG_DIR": "/tmp/omni_task/logs"
         }
       },
       {
         "name": "ivf_predict",
-        "command": "python3 -m clinical_tools.predict_service",
+        "command": "python3 /tmp/omni_services/ivf_services/predict/server.py",
         "port": 9202,
         "health_check": "http://localhost:9202/health",
         "health_check_method": "GET",
@@ -139,7 +140,8 @@
         "env": {
           "PYTHONPATH": "/tmp/omni_services",
           "IVF_MODEL": "/tmp/omni_services/models/lr_35_indicators.json",
-          "IVF_PREDICT_PORT": "9202"
+          "IVF_PREDICT_PORT": "9202",
+          "IVF_LOG_DIR": "/tmp/omni_task/logs"
         }
       }
     ],
