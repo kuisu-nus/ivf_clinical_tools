@@ -530,9 +530,8 @@ class SpecTests(unittest.TestCase):
                 self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")   # Claude Code drops tools with other names
         ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in specs.tool_specs()}
         self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202"})
-        today = json.loads((ROOT / "task.json").read_text(encoding="utf-8"))["runtime"]["mock_today"]
         self.assertEqual((TASK / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8"),
-                         specs.system_prompt_prefix(today))
+                         specs.system_prompt_prefix())
 
 
 if __name__ == "__main__":

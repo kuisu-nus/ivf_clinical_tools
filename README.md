@@ -46,7 +46,7 @@ tasks/<task_id>/
 ```markdown
 ├── task.json                        # 任务元数据、两个服务、grader 配置、文件映射
 ├── task/
-│   ├── prompt.md                    # 示例任务：虚构患者 38 岁、AMH 0.9、Gn 10 天，要求使用两个工具
+│   ├── prompt.md                    # 示例病例（三阶段格式）：虚构患者 38 岁、AMH 0.9、Gn 10 天
 │   ├── scripts/                     # start_services.sh 分别启动两个服务；stop_services.sh；setup.sh
 │   ├── tools/                       # ivf_similar_patients.json（→9201）、ivf_predict_outcome.json（→9202），由代码生成
 │   ├── services/
@@ -63,10 +63,12 @@ tasks/<task_id>/
 │   │   │   ├── train_predictor.py   #   训练脚本：训练数据 → 模型文件
 │   │   │   └── public_data.py       #   生成仓库中的训练集（只保留三项输入）
 │   │   ├── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
+│   │   ├── models/lr_35_indicators_fold{0-4}.json  # 各自去掉一折训练的模型（RL 时用，避免病例看到自己）
 │   │   └── data/train_age_amh_gn.csv     # 训练集：只保留年龄、AMH、Gn 天数，其余指标为均值（clinical_tools/public_data.py 生成）
 │   └── runtime/                     # claw_tools_mcp.py、gen_trace.py、patch_llm_judge.py（模板原样）、system_prompt_prefix.txt
-├── grader/                          # 模板打分框架原样；grader.py 中只替换了 GRADING_SPEC
-├── tests/test_clinical_tools.py     # 单元测试（合成数据）
+├── grader/                          # 模板打分框架原样；grader.py 为三阶段结局任务的确定性奖励
+├── dataset/                         # build_samples.py 生成样本；run_eval.sh 本地评估；eval_case.py、summarize_eval.py
+├── tests/                           # test_clinical_tools.py（工具与服务）、test_staged_task.py（奖励与样本）
 ├── mcp.example.json                 # Claude Code 的 MCP 配置示例
 └── requirements.txt
 ```
@@ -180,9 +182,54 @@ powershell -ExecutionPolicy Bypass -File task\scripts\stop_services.ps1
 3. 运行：`claude -p "$(cat task/prompt.md)" --mcp-config .mcp.json --strict-mcp-config --allowedTools "mcp__ivf-clinical__ivf_similar_patients" "mcp__ivf-clinical__ivf_predict_outcome"`
 4. 回溯：每次调用写入 `OMNI_TRACE_DIR/dispatches.jsonl`（工具名、请求的服务地址、参数、返回、耗时、时间）。
 
-### 打分（grader）
+### 三阶段妊娠结局任务（评估与 RL）
 
-`grader/grader.py` 的 `GRADING_SPEC` 针对 `task/prompt.md`：必须调用两个工具；确定性部分检查关键数值（17.4%、37.1%、26.7%、39.2%）是否出现在回答中；LLM judge 部分评估统计与预测是否如实转述、两种证据的一致性与总体比较、门槛与窗口判断、局限说明、不给治疗建议。期望数值基于 1132 例训练集经上述清洗后的结果和 `models/lr_35_indicators.json`。
+Agent 判断本次新鲜胚胎移植的**临床妊娠结局**（妊娠 / 未妊娠 / 不确定），不输出概率。系统提示词 `task/runtime/system_prompt_prefix.txt`（由 `ivf_services/specs.py` 生成）规定：
+
+| 阶段 | 病例里给出的信息 | 要做的事 |
+|---|---|---|
+| 1 初诊（年龄与周期前检查） | 年龄、女方内分泌与 AMH、血常规、凝血、甲功、血糖、肾功；男方精液常规与化验 | 指出关键异常和可疑数据；`ivf_predict_outcome`（age、amh）+ `ivf_similar_patients`（age、amh）各一次 |
+| 2 促排卵与取卵 | Gn 天数、HCG 日 P、精液处理方法与处理后参数 | 再调用一次 `ivf_predict_outcome`（age、amh、gn_days） |
+| 3 胚胎 | 胚胎信息（本数据集没有；`胚胎冷冻数` 列存在时才显示，其定义未确认且可能泄露结局） | 不调用工具，定性说明 |
+
+回答先分析后结论，每个阶段一到两句，最后一行 `结论：妊娠 / 未妊娠 / 不确定`。病例文本由 `dataset/build_samples.py` 生成（约 300 字），不含病例编号，清洗掉的值显示为"未提供"。
+
+**奖励（`grader/grader.py`，全部为确定性规则，不调用 LLM 评审）**
+
+| 项目 | 权重 | 规则 |
+|---|---|---|
+| outcome | 0.60 | 按类别平衡：真实妊娠时答对 1.0、答错 0.0；真实未妊娠时答对 0.823、答错 0.177；不确定 0.5。以训练集妊娠率 444/1132 计算，**一律答妊娠、一律答未妊娠、一律答不确定的期望分都是 0.5**，只有真正区分病例才能高于 0.5（避免坍缩成单一类别） |
+| tool_use | 0.15 | 初诊预测、促排预测（带 gn_days）、相似人群检索各一次，参数与病例一致 |
+| faithfulness | 0.10 | 回答中的百分数和"N 例"都能在工具返回中找到（另允许总体 39% 和 95% 置信水平） |
+| format | 0.05 | 三个阶段按顺序出现，结论在最后一行 |
+| concise | 0.10 | 回答 ≤ 300 字满分，600 字为 0，中间线性 |
+| 门槛 | — | 出现治疗或用药建议，整题 0 分 |
+
+标签和病例真实输入写在每个病例的 `metadata.json` 里，Agent 结束后才复制到评分目录。
+
+**生成样本**（每个病例一条，Dressage claw 格式）：
+
+```bash
+# 测试集：工具使用全部训练病例和全量模型
+python dataset/build_samples.py --cases <测试集CSV> --split test --out runs/test_samples \
+    --task-root <数据集机器上本仓库的路径> --cases-root <数据集机器上 runs/test_samples/cases 的路径>
+# 训练集（RL）或开发折：相似检索隐藏该病例所在的 1/5，预测换用不含该折的模型 models/lr_35_indicators_fold{k}.json
+python dataset/build_samples.py --cases <完整清洗后的训练集CSV> --split train [--fold 0] [--limit 50] --out runs/train_samples
+```
+
+输出目录含标签和病例数据，不要提交。`--limit` 按编号的哈希顺序抽样，避免受编号顺序（本数据集编号顺序本身对应结局）影响。
+
+**本地评估**（bash，逐例运行 Claude Code，可断点续跑）：
+
+```bash
+# DeepSeek 等后端：先设置 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL
+bash dataset/run_eval.sh runs/test_samples            # 结果在 runs/test_samples/eval，汇总 summary.json
+EVAL_LIMIT=20 EVAL_MODEL=<模型名> bash dataset/run_eval.sh runs/dev_fold0
+```
+
+汇总指标：各答案数量、准确率、敏感度、特异度、平衡准确率、不确定比例、平均奖励及各项得分、平均字数和输出 token。
+
+注意：封存的 283 例测试集按项目约定只在最后用一次。调 prompt 时请用训练集的开发折（`--split train --fold k`），确定后再跑测试集。
 
 ### 测试
 

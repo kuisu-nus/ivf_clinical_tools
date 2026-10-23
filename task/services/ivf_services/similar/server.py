@@ -55,8 +55,8 @@ class SimilarPatientsRequest(BaseModel):
     strategy: str = Field(DEFAULT_STRATEGY, json_schema_extra={"enum": list(STRATEGIES)},
                           description="检索策略。" + "；".join(f"{s.name}：{s.description}" for s in STRATEGIES.values()))
     extra_fields: list[str] = Field(default_factory=list, max_length=10,
-                                    json_schema_extra={"items": {"type": "string", "enum": EXTRA_FIELDS}},
-                                    description="相似患者列表中除年龄、AMH、妊娠结局外额外返回的指标（中文指标名），默认不返回")
+                                    description="相似患者列表中除年龄、AMH、妊娠结局外额外返回的指标，"
+                                                "用训练数据中的中文指标名（如 女方基础FSH），默认不返回")
 
     @field_validator("age", "amh", "age_window", mode="before")
     @classmethod
