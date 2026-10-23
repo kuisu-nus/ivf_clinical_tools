@@ -12,3 +12,6 @@ task/services/data/*
 trace/
 dispatches.jsonl
 .mcp.json
+
+# Example run of openclaw_eval (fictional case)
+!openclaw_eval/examples/output/demo/dispatches.jsonl

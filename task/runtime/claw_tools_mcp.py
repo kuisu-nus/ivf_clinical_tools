@@ -282,8 +282,10 @@ def append_agents_md() -> None:
         "",
     ]
     block = "\n".join(lines) + "\n"
-    pattern = "/workspace_sandbox/blackbox_server_runtime/bbs-*/home/.openclaw/workspace/AGENTS.md"
-    targets = glob.glob(pattern)
+    runtime_root = os.environ.get("BBS_RUNTIME_ROOT") or "/workspace_sandbox/blackbox_server_runtime"
+    pattern = f"{runtime_root}/bbs-*/home/.openclaw/workspace/AGENTS.md"
+    # OMNI_AGENTS_MD names the file directly (an OpenClaw outside the Dressage sandbox, see openclaw_eval/).
+    targets = [os.environ["OMNI_AGENTS_MD"]] if os.environ.get("OMNI_AGENTS_MD") else glob.glob(pattern)
     if not targets:
         print(f"append_agents_md: no AGENTS.md found at {pattern}")
         return

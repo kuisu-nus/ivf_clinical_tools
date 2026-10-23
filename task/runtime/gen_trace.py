@@ -14,8 +14,9 @@ import json
 import os
 import pathlib
 
-GRADER_DIR = pathlib.Path("/tmp/omni_grader")
-TRACE_DIR = pathlib.Path("/tmp/omni_task/trace")
+# The sandbox paths; OMNI_GRADER_DIR / OMNI_TRACE_DIR override them outside the sandbox (openclaw_eval/).
+GRADER_DIR = pathlib.Path(os.environ.get("OMNI_GRADER_DIR") or "/tmp/omni_grader")
+TRACE_DIR = pathlib.Path(os.environ.get("OMNI_TRACE_DIR") or "/tmp/omni_task/trace")
 
 TOOL_PREFIX = os.environ.get("OMNI_MCP_SERVER_NAME", "claw-tools") + "__"
 

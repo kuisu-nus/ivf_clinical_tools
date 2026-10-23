@@ -68,6 +68,7 @@ tasks/<task_id>/
 │   └── runtime/                     # claw_tools_mcp.py、gen_trace.py、patch_llm_judge.py（模板原样）、system_prompt_prefix.txt
 ├── grader/                          # 模板打分框架原样；grader.py 为三阶段结局任务的确定性奖励
 ├── dataset/                         # build_samples.py 生成样本；run_eval.sh 本地评估；eval_case.py、summarize_eval.py
+├── openclaw_eval/                   # 在本机 OpenClaw 上按 before_agent → agent → after_agent 逐例运行并评分（见其 README）
 ├── tests/                           # test_clinical_tools.py（工具与服务）、test_staged_task.py（奖励与样本）
 ├── mcp.example.json                 # Claude Code 的 MCP 配置示例
 └── requirements.txt
@@ -229,6 +230,12 @@ EVAL_LIMIT=20 EVAL_MODEL=<模型名> bash dataset/run_eval.sh runs/dev_fold0
 
 汇总指标：各答案数量、准确率、敏感度、特异度、平衡准确率、不确定比例、平均奖励及各项得分、平均字数和输出 token。
 
+**在 OpenClaw 上评估**（例如 H20 上的 OpenClaw + Hy3）：`openclaw_eval/` 按 Dressage 样本的三个阶段逐例执行——启动工具服务（before_agent）→ `openclaw agent` 回答 → 放入标签和评分器打分（after_agent）。用法、每个阶段的输入输出文件和示例见 [openclaw_eval/README.md](openclaw_eval/README.md)。
+
+```bash
+bash openclaw_eval/prepare.sh && bash openclaw_eval/run_all.sh runs/openclaw_dev    # 用完 bash openclaw_eval/restore.sh
+```
+
 注意：封存的 283 例测试集按项目约定只在最后用一次。调 prompt 时请用训练集的开发折（`--split train --fold k`），确定后再跑测试集。
 
 ### 测试
@@ -245,6 +252,7 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 - 相似检索：拒绝门槛、统计与手工计数一致、输出不含编号且与行顺序无关、排除折、`extra_fields`、新增一个检索策略类即可被服务使用。
 - 预测：逻辑回归能恢复已知系数、AUC 与成对定义一致、模型文件只含汇总量、输出只有概率和置信区间、其余指标与缺失输入用训练均值、训练脚本不覆盖已有模型、删除训练数据后仍能预测。
 - 服务：Pydantic 校验（缺参数、类型、范围、未知参数、未知策略和指标、非法 JSON）返回 422；audit/reset/health；每个服务只提供自己的端点；请求和调用写入日志、日志文件按大小滚动；40 个并发请求压向一个慢速、上限很小的服务时，超出部分返回 429，工作线程不超过上限，服务保持可用。
+- OpenClaw 评估脚本（`tests/test_openclaw_eval.py`）：agent 阶段只保留回答（去掉进度行）、after_agent 对示例重新评分得到相同分数、工具说明写入指定的 AGENTS.md。
 - 仓库中的训练集：列与原数据一致、只有三项输入逐例不同、其余为均值；相似检索结果与文档中的数字一致（23 例、17.4%）。
 - 工具规格与 system prompt 与请求模型一致、端口正确；MCP 桥接调用两个服务，参数错误时返回 isError。
 

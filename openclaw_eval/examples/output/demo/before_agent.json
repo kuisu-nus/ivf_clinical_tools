@@ -1,0 +1,37 @@
+{
+  "service_env": {},
+  "health": {
+    "similar": {
+      "status": "ok",
+      "service": "ivf_similar",
+      "tool": "ivf_similar_patients",
+      "uptime_seconds": 0.3,
+      "responses_by_status": {
+        "200": 1
+      },
+      "computations_in_flight": 0,
+      "max_concurrency": 4,
+      "max_pending": 512,
+      "scope": "全部训练病例",
+      "cases": 1132,
+      "strategies": [
+        "age_amh_band"
+      ]
+    },
+    "predict": {
+      "status": "ok",
+      "service": "ivf_predict",
+      "tool": "ivf_predict_outcome",
+      "uptime_seconds": 0.3,
+      "responses_by_status": {
+        "200": 1
+      },
+      "computations_in_flight": 0,
+      "max_concurrency": 4,
+      "max_pending": 512,
+      "model": "lr_35_indicators.json",
+      "model_training_n": 1132,
+      "model_cv_auc_three_inputs": 0.5929
+    }
+  }
+}

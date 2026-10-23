@@ -1,0 +1,12 @@
+{
+  "case_id": "demo",
+  "split": "demo",
+  "fold": null,
+  "label": "未妊娠",
+  "inputs": {
+    "age": 38,
+    "amh": 0.9,
+    "gn_days": 10
+  },
+  "note": "虚构病例（task/prompt.md）。label 只用来演示结局评分，不是真实结局。"
+}
