@@ -236,6 +236,12 @@ EVAL_LIMIT=20 EVAL_MODEL=<模型名> bash dataset/run_eval.sh runs/dev_fold0
 bash openclaw_eval/prepare.sh && bash openclaw_eval/run_all.sh runs/openclaw_dev    # 用完 bash openclaw_eval/restore.sh
 ```
 
+**在 E2B 沙箱上评估**：`e2b_eval/` 不依赖 Dressage，读取同一份 `samples.jsonl`，为每个病例新建一个独立 E2B 沙箱（模板 `e2b-dressage-claw-blackbox`），依次执行 before_agent（上传任务文件、启动工具服务、注册 MCP）→ agent（沙箱内 OpenClaw 回答）→ after_agent（Agent 结束后才上传评分器和标签，运行 grader），产出每例 `score.json` 和 `summary.json`。用法、环境变量、产物和排错见 [e2b_eval/README.md](e2b_eval/README.md)。
+
+```bash
+python3 -m e2b_eval --samples runs/openclaw_dev/samples.jsonl --case 0974
+```
+
 注意：封存的 283 例测试集按项目约定只在最后用一次。调 prompt 时请用训练集的开发折（`--split train --fold k`），确定后再跑测试集。
 
 ### 测试

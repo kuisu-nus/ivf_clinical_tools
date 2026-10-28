@@ -6,6 +6,8 @@ __pycache__/
 *.pkl
 /data/
 outputs/
+runs/
+.env
 task/services/data/*
 # Shareable training file: public dataset, only age / AMH / Gn days per case (clinical_tools.public_data)
 !task/services/data/train_age_amh_gn.csv
@@ -15,3 +17,4 @@ dispatches.jsonl
 
 # Example run of openclaw_eval (fictional case)
 !openclaw_eval/examples/output/demo/dispatches.jsonl
+*.swp
