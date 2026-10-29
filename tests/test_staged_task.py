@@ -163,10 +163,28 @@ class BuildSamplesTests(unittest.TestCase):
         self.assertIn("/tmp/omni_grader/grader.py", after)
         before = {f["path"] for f in sample["metadata"]["before_agent_files"]}
         self.assertIn("/tmp/omni_task/runtime/system_prompt_prefix.txt", before)
+        # OpenClaw workspace files replace OpenClaw's long default templates (map_workspace copies them)
+        for name in ("AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md", "HEARTBEAT.md", "MEMORY.md"):
+            self.assertIn(f"/workspace/{name}", before)
+        map_cmd = next(c["cmd"] for c in sample["metadata"]["blackbox_execute_cmds"]["before_agent"]
+                       if c["name"] == "map_workspace")
+        self.assertIn('rm -f "$OC_WS/BOOTSTRAP.md"', map_cmd)
         self.assertFalse(any(p.startswith("/tmp/omni_grader") for p in before))     # label never before the agent
         self.assertNotIn("OPENAI_API_KEY", json.dumps(sample))
         with self.assertRaises(SystemExit):
             self.build(self.public_rows()[:5], "--split", "test")                   # training cases refused
+
+    def test_workspace_files_are_short(self):
+        # AGENTS.md is what the Dressage BlackboxServer writes from the system prompt (plus its no-questions
+        # policy), so copying it over changes nothing but the stale defaults; the other files are headers only.
+        workspace = ROOT / "task" / "workspace"
+        prompt = (ROOT / "task" / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8")
+        agents = (workspace / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertTrue(agents.startswith(prompt))
+        self.assertIn("<!-- blackbox-server-deny-question -->", agents[len(prompt):])
+        self.assertLess(len(agents) - len(prompt), 400)
+        for name in ("SOUL", "TOOLS", "IDENTITY", "USER", "HEARTBEAT", "MEMORY"):
+            self.assertEqual((workspace / f"{name}.md").read_text(encoding="utf-8"), f"# {name}.md\n")
 
     def test_train_split_holds_out_the_fold(self):
         out, samples = self.build(self.public_rows(), "--split", "train", "--fold", "2", "--limit", "5")

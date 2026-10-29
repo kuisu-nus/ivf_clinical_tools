@@ -100,8 +100,7 @@ def _task_files(task_root: str) -> tuple[list[dict], list[dict]]:
         return [{"path": f"{target}/{p[len(prefix):]}", "local_path": f"{task_root}/{p}"}
                 for p in sorted(tracked) if p.startswith(prefix) and not p.endswith(".gitkeep")]
 
-    before = [f for e in task["files"]["task"] if e["source"] != "workspace"
-              for f in mapped(f"task/{e['source']}", e["target"])]
+    before = [f for e in task["files"]["task"] for f in mapped(f"task/{e['source']}", e["target"])]
     after = [f for e in task["grader"]["files"] for f in mapped(e["source"], e["target"])]
     return before, after
 
@@ -111,7 +110,7 @@ def _commands(service_env: dict[str, str]) -> dict:
     oc_ws = 'OC_WS=$(ls -d "${BBS_RUNTIME_ROOT:-/workspace_sandbox/blackbox_server_runtime}"/bbs-*/home/.openclaw/workspace 2>/dev/null | head -1)'
     return {
         "before_agent": [
-            {"name": "map_workspace", "cmd": f'mkdir -p /workspace; {oc_ws}; if [ -n "$OC_WS" ] && [ -n "$(ls -A /workspace 2>/dev/null)" ]; then cp -r /workspace/* "$OC_WS/"; fi; ls -la /workspace/', "required": True, "timeout": 15.0},
+            {"name": "map_workspace", "cmd": f'mkdir -p /workspace; {oc_ws}; if [ -n "$OC_WS" ] && [ -n "$(ls -A /workspace 2>/dev/null)" ]; then cp -r /workspace/* "$OC_WS/"; rm -f "$OC_WS/BOOTSTRAP.md"; fi; ls -la /workspace/', "required": True, "timeout": 15.0},
             {"name": "setup_task", "cmd": "bash /tmp/omni_task/scripts/setup.sh", "required": True, "timeout": 120.0},
             {"name": "start_services", "cmd": f"{env} bash /tmp/omni_task/scripts/start_services.sh".strip(), "required": True, "timeout": 90.0},
             {"name": "register_mcp", "cmd": 'OC_HOME=$(ls -d "${BBS_RUNTIME_ROOT:-/workspace_sandbox/blackbox_server_runtime}"/bbs-*/home 2>/dev/null | head -1); HOME="$OC_HOME" openclaw mcp set claw-tools \'{"command":"python3","args":["/tmp/omni_task/runtime/claw_tools_mcp.py"],"env":{"OMNI_TOOL_SPECS_DIR":"/tmp/omni_task/tools","OMNI_TRACE_DIR":"/tmp/omni_task/trace","NO_PROXY":"127.0.0.1,localhost,0.0.0.0,::1","no_proxy":"127.0.0.1,localhost,0.0.0.0,::1"},"cwd":"/tmp/omni_task"}\'', "required": True, "timeout": 120.0},
