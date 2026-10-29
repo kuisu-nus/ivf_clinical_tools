@@ -10,4 +10,4 @@ ARGS=("$@")
 if [ -f "$HERE/.env" ]; then
   ARGS=(--env-file "$HERE/.env" "${ARGS[@]}")
 fi
-exec python3 -m e2b_eval "${ARGS[@]}"
+exec python -m e2b_eval "${ARGS[@]}"
