@@ -23,7 +23,7 @@ echo "backup: $BACKUP"
 
 "$PYTHON" "$HERE/oc_config.py" "$OC/openclaw.json" --provider "$OC_PROVIDER" \
   --base-url "http://127.0.0.1:$MODEL_PORT/v1" --model "$MODEL_ID"
-(export HOME="$OC_SOURCE_HOME"; openclaw config validate >/dev/null && bash "$REPO/openclaw_eval/prepare.sh" | tail -n 2 \
+(export HOME="$OC_SOURCE_HOME"; "${OPENCLAW_BIN:-openclaw}" config validate >/dev/null && bash "$REPO/openclaw_eval/prepare.sh" | tail -n 2 \
   && source "$REPO/openclaw_eval/common.sh" && bash "$REPO/task/scripts/start_services.sh" | tail -n 2 | cut -c1-80)
 echo "deployed: default model $OC_PROVIDER/$MODEL_ID; try: openclaw agent --session-id demo --message '你好'"
 echo "undo:     bash ckpt_eval/oc_restore.sh $BACKUP"

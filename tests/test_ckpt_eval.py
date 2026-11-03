@@ -107,7 +107,7 @@ class OcHomeTests(unittest.TestCase):
                             '[ "$1 $2" = "mcp probe" ] && echo "- claw-tools: 2 tools"\nexit 0\n')
             stub.chmod(0o755)
             env = {**os.environ, "OC_SOURCE_HOME": str(src), "OC_EVAL_ROOT": str(tmp / "eval"),
-                   "PATH": f"{stub.parent}:{os.environ['PATH']}", "STUB_LOG": str(tmp / "log"), "PYTHON": sys.executable}
+                   "PATH": f"{stub.parent}:{os.environ['PATH']}", "OPENCLAW_BIN": str(stub), "STUB_LOG": str(tmp / "log"), "PYTHON": sys.executable}
             run = subprocess.run([BASH, str(CKPT / "oc_home.sh"), "step100", "30001", "9321"], env=env,
                                  capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
