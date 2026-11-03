@@ -69,6 +69,7 @@ tasks/<task_id>/
 ├── grader/                          # 模板打分框架原样；grader.py 为三阶段结局任务的确定性奖励
 ├── dataset/                         # build_samples.py 生成样本；run_eval.sh 本地评估；eval_case.py、summarize_eval.py
 ├── openclaw_eval/                   # 在本机 OpenClaw 上按 before_agent → agent → after_agent 逐例运行并评分（见其 README）
+├── ckpt_eval/                       # 训练 checkpoint 的转换、SGLang 部署、OpenClaw 配置和测试集评估对比（见其 README）
 ├── tests/                           # test_clinical_tools.py（工具与服务）、test_staged_task.py（奖励与样本）
 ├── mcp.example.json                 # Claude Code 的 MCP 配置示例
 └── requirements.txt
