@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
         if any(r["characters"] is not None for r in rows) else None,
         "mean_output_tokens": round(mean(r["output_tokens"] for r in rows if r["output_tokens"]), 1)
         if any(r["output_tokens"] for r in rows) else None,
-        "note": "No-skill policies (always one answer) score an expected outcome 0.5; balanced accuracy 0.5 is chance.",
+        "note": "Balanced accuracy 0.5 is chance; the outcome score is plain accuracy (不确定 = 0.5), so always 未妊娠 already scores about 0.61.",
     }
     (eval_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))

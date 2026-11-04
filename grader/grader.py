@@ -5,7 +5,7 @@ The agent analyses a case in three stages (初诊 / 促排 / 胚胎) and ends wi
 mount, copied in only after the agent has finished (label and the true tool inputs).
 
 Items (weights sum to 1; no LLM judge, so rewards are fast and reproducible):
-  outcome       0.70  class-balanced outcome score (table below)
+  outcome       0.70  1.0 when the conclusion matches the outcome, 0.0 when not, 0.5 for 不确定
   tool_use      0.15  stage-1 prediction (age, AMH), stage-2 prediction (with Gn days) and one
                       similar-patient query, each with the case's own values
   faithfulness  0.10  every percentage and case count in the answer comes from a tool result
@@ -14,13 +14,13 @@ Items (weights sum to 1; no LLM judge, so rewards are fast and reproducible):
                       (its metadata also records the answer length; length is not scored)
   gate          treatment / medication advice zeroes the task
 
-Outcome score: correct and wrong answers are weighted by the inverse class frequency (p = 444/1132
-pregnant in the training set) and mapped to [0, 1], so that always answering 妊娠, always 未妊娠, or
-always 不确定 each earn an expected 0.5; only answers that separate the cases score above 0.5.
+Outcome score: a correct answer earns 1.0, a wrong one 0.0, 不确定 0.5, whatever the true outcome.
+This is not class-balanced: with p = 444/1132 pregnant in the training set, always answering 未妊娠
+expects 1 - p = 0.61 on the outcome, always 妊娠 0.39 and always 不确定 0.5.
 
                answer: 妊娠   未妊娠   不确定
-  truth 妊娠          1.000   0.000    0.5
-  truth 未妊娠        0.177   0.823    0.5
+  truth 妊娠          1.0     0.0      0.5
+  truth 未妊娠        0.0     1.0      0.5
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from omni_grader_helpers import (
     zero_task_gate,
 )
 
-PREVALENCE = 444 / 1132
+PREVALENCE = 444 / 1132                         # training-set pregnancy rate (only documents the outcome table)
 WEIGHTS = {"outcome": 0.70, "tool_use": 0.15, "faithfulness": 0.10, "format": 0.05}
 STAGES = ("【初诊】", "【促排】", "【胚胎】")
 ALLOWED_RATES = (39.0, 39.2, 95.0)              # overall rate (system prompt / similar tool); 95% interval level
@@ -49,12 +49,9 @@ ADVICE = re.compile(r"(建议|推荐|应当|应该)[^。；;\n]{0,12}?(用药|�
 
 
 def outcome_score(answer: str, truth: str) -> float:
-    w_pos, w_neg = 1 / (2 * PREVALENCE), 1 / (2 * (1 - PREVALENCE))
     if answer == "不确定":
         return 0.5
-    weight = w_pos if truth == "妊娠" else w_neg
-    sign = 1 if answer == truth else -1
-    return 0.5 + sign * weight / (2 * max(w_pos, w_neg))
+    return 1.0 if answer == truth else 0.0
 
 
 # ---- reading the run -------------------------------------------------------

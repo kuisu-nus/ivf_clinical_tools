@@ -48,17 +48,20 @@ def run_grade(answer, calls=CALLS, label="未妊娠", inputs=INPUTS):
 
 
 class OutcomeRewardTests(unittest.TestCase):
-    def test_no_skill_policies_all_earn_one_half(self):
+    def test_no_skill_policies(self):
+        # not class-balanced: always answering the majority class 未妊娠 expects more than chance
         p = grader.PREVALENCE
-        for answer in ("妊娠", "未妊娠", "不确定"):
-            expected = p * grader.outcome_score(answer, "妊娠") + (1 - p) * grader.outcome_score(answer, "未妊娠")
-            self.assertAlmostEqual(expected, 0.5, places=9, msg=answer)
+        expected = {a: p * grader.outcome_score(a, "妊娠") + (1 - p) * grader.outcome_score(a, "未妊娠")
+                    for a in ("妊娠", "未妊娠", "不确定")}
+        self.assertAlmostEqual(expected["未妊娠"], 1 - p, places=9)
+        self.assertAlmostEqual(expected["妊娠"], p, places=9)
+        self.assertEqual(expected["不确定"], 0.5)
 
     def test_table(self):
         self.assertEqual(grader.outcome_score("妊娠", "妊娠"), 1.0)
         self.assertEqual(grader.outcome_score("未妊娠", "妊娠"), 0.0)
-        self.assertAlmostEqual(grader.outcome_score("未妊娠", "未妊娠"), 0.823, places=3)
-        self.assertAlmostEqual(grader.outcome_score("妊娠", "未妊娠"), 0.177, places=3)
+        self.assertEqual(grader.outcome_score("未妊娠", "未妊娠"), 1.0)
+        self.assertEqual(grader.outcome_score("妊娠", "未妊娠"), 0.0)
         self.assertEqual(grader.outcome_score("不确定", "未妊娠"), 0.5)
 
 
