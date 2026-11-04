@@ -41,7 +41,7 @@ run = json.loads((res / "agent_run.json").read_text()) if (res / "agent_run.json
                                            ensure_ascii=False, indent=2), encoding="utf-8")
 items = {i["name"]: i for i in graded["raw_scores"]["items"]}
 outcome = items.get("outcome", {}).get("metadata", {})
-parts = "  ".join(f"{k} {items[k]['score']}" for k in ("outcome", "tool_use", "faithfulness", "format", "concise")
+parts = "  ".join(f"{k} {items[k]['score']}" for k in ("outcome", "tool_use", "faithfulness", "format")
                   if k in items and items[k]["score"] is not None)
 print(f"{case_id}: score {graded['overall_score']:.3f}  answer {outcome.get('predicted')}  "
       f"truth {outcome.get('truth')}  | {parts}")

@@ -5,13 +5,13 @@ The agent analyses a case in three stages (初诊 / 促排 / 胚胎) and ends wi
 mount, copied in only after the agent has finished (label and the true tool inputs).
 
 Items (weights sum to 1; no LLM judge, so rewards are fast and reproducible):
-  outcome       0.60  class-balanced outcome score (table below)
+  outcome       0.70  class-balanced outcome score (table below)
   tool_use      0.15  stage-1 prediction (age, AMH), stage-2 prediction (with Gn days) and one
                       similar-patient query, each with the case's own values
   faithfulness  0.10  every percentage and case count in the answer comes from a tool result
                       (or the 39% overall rate given in the system prompt)
   format        0.05  【初诊】【促排】【胚胎】 in order, and the conclusion as the last line
-  concise       0.10  full score up to CONCISE_FULL characters, zero at CONCISE_ZERO
+                      (its metadata also records the answer length; length is not scored)
   gate          treatment / medication advice zeroes the task
 
 Outcome score: correct and wrong answers are weighted by the inverse class frequency (p = 444/1132
@@ -38,8 +38,7 @@ from omni_grader_helpers import (
 )
 
 PREVALENCE = 444 / 1132
-WEIGHTS = {"outcome": 0.60, "tool_use": 0.15, "faithfulness": 0.10, "format": 0.05, "concise": 0.10}
-CONCISE_FULL, CONCISE_ZERO = 300, 600          # characters of the final answer, whitespace excluded
+WEIGHTS = {"outcome": 0.70, "tool_use": 0.15, "faithfulness": 0.10, "format": 0.05}
 STAGES = ("【初诊】", "【促排】", "【胚胎】")
 ALLOWED_RATES = (39.0, 39.2, 95.0)              # overall rate (system prompt / similar tool); 95% interval level
 CONCLUSION = re.compile(r"^\s*结论\s*[:：]\s*(未妊娠|不确定|妊娠)\s*[。.]?\s*$", re.MULTILINE)
@@ -148,15 +147,8 @@ def _format(answer: str, has_conclusion_last: bool) -> dict[str, Any]:
     stages_ok = all(p >= 0 for p in positions) and positions == sorted(positions)
     score = 0.5 * stages_ok + 0.5 * has_conclusion_last
     return score_item("format", score, weight=WEIGHTS["format"],
-                      reason=f"stages in order: {stages_ok}; conclusion is the last line: {has_conclusion_last}")
-
-
-def _concise(answer: str) -> dict[str, Any]:
-    n = len(re.sub(r"\s", "", answer))
-    score = 1.0 if n <= CONCISE_FULL else max(0.0, (CONCISE_ZERO - n) / (CONCISE_ZERO - CONCISE_FULL))
-    return score_item("concise", round(score, 4), weight=WEIGHTS["concise"],
-                      reason=f"{n} characters (full score up to {CONCISE_FULL}, zero at {CONCISE_ZERO}).",
-                      metadata={"characters": n})
+                      reason=f"stages in order: {stages_ok}; conclusion is the last line: {has_conclusion_last}",
+                      metadata={"characters": len(re.sub(r"\s", "", answer))})   # reported, not scored
 
 
 def _advice(answer: str) -> list[str]:
@@ -193,5 +185,4 @@ def grade(ctx) -> list[dict[str, Any]]:
     items.append(_tool_use(calls, metadata.get("inputs") or {}))
     items.append(_faithfulness(answer, calls))
     items.append(_format(answer, conclusion_last))
-    items.append(_concise(answer))
     return items

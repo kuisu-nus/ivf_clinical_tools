@@ -66,9 +66,10 @@ class GraderTests(unittest.TestCase):
     def test_good_answer_scores_full(self):
         items, reward = run_grade(GOOD)
         self.assertEqual(items["outcome"]["metadata"]["predicted"], "未妊娠")
-        for name in ("tool_use", "faithfulness", "format", "concise"):
+        for name in ("tool_use", "faithfulness", "format"):
             self.assertEqual(items[name]["score"], 1.0, name)
-        self.assertAlmostEqual(reward, 0.6 * grader.outcome_score("未妊娠", "未妊娠") + 0.4, places=3)
+        self.assertAlmostEqual(reward, 0.7 * grader.outcome_score("未妊娠", "未妊娠") + 0.3, places=3)
+        self.assertNotIn("concise", items)
         self.assertAlmostEqual(sum(grader.WEIGHTS.values()), 1.0)
 
     def test_conclusion_parsing(self):
@@ -95,9 +96,11 @@ class GraderTests(unittest.TestCase):
         self.assertEqual(run_grade(GOOD.replace("17.4%", "17%"))[0]["faithfulness"]["score"], 1.0)   # rounding is fine
         self.assertEqual(run_grade(GOOD.replace("17.4%", "17.4%（95% 置信区间 7.0%–37.1%）"))[0]["faithfulness"]["score"], 1.0)
 
-    def test_long_answers_lose_the_concise_score(self):
-        items, _ = run_grade(GOOD.replace("【胚胎】未提供。", "【胚胎】未提供。" + "补充说明" * 150))
-        self.assertEqual(items["concise"]["score"], 0.0)
+    def test_length_is_reported_not_scored(self):
+        long = GOOD.replace("【胚胎】未提供。", "【胚胎】未提供。" + "补充说明" * 150)
+        items, reward = run_grade(long)
+        self.assertEqual(reward, run_grade(GOOD)[1])
+        self.assertGreater(items["format"]["metadata"]["characters"], 600)
 
     def test_treatment_advice_zeroes_the_task(self):
         _, reward = run_grade(GOOD.replace("【胚胎】未提供。", "【胚胎】未提供，建议加用生长激素。"))

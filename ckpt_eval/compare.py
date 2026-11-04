@@ -17,7 +17,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-PARTS = ("outcome", "tool_use", "faithfulness", "format", "concise")
+PARTS = ("outcome", "tool_use", "faithfulness", "format", "concise")   # concise: runs graded before it was dropped
 ANSWERS = ("妊娠", "未妊娠", "不确定")
 
 

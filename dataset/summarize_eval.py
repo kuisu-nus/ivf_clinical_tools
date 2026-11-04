@@ -20,9 +20,10 @@ def main(argv: list[str] | None = None) -> None:
         outcome = items.get("outcome", {}).get("metadata", {})
         rows.append({"reward": score["grader"]["overall_score"], "predicted": outcome.get("predicted"),
                      "truth": outcome.get("truth"), "gate_failed": items["no_treatment_advice"]["status"] == "failed",
-                     **{k: items[k]["score"] for k in ("outcome", "tool_use", "faithfulness", "format", "concise")
+                     **{k: items[k]["score"] for k in ("outcome", "tool_use", "faithfulness", "format")
                         if k in items},
-                     "characters": items.get("concise", {}).get("metadata", {}).get("characters"),
+                     "characters": (items.get("format", {}).get("metadata", {}).get("characters")
+                                    or items.get("concise", {}).get("metadata", {}).get("characters")),   # older runs
                      "output_tokens": score["run"].get("output_tokens"), "duration_ms": score["run"].get("duration_ms")})
     if not rows:
         raise SystemExit(f"no scored cases in {eval_dir}")
@@ -48,8 +49,9 @@ def main(argv: list[str] | None = None) -> None:
         "gate_failed_rate": share(lambda r: r["gate_failed"]),
         "mean_reward": round(mean(r["reward"] for r in rows), 4),
         "mean_component": {k: round(mean(r[k] for r in rows if r.get(k) is not None), 4)
-                           for k in ("outcome", "tool_use", "faithfulness", "format", "concise")},
-        "mean_answer_characters": round(mean(r["characters"] for r in rows if r["characters"] is not None), 1),
+                           for k in ("outcome", "tool_use", "faithfulness", "format")},
+        "mean_answer_characters": round(mean(r["characters"] for r in rows if r["characters"] is not None), 1)
+        if any(r["characters"] is not None for r in rows) else None,
         "mean_output_tokens": round(mean(r["output_tokens"] for r in rows if r["output_tokens"]), 1)
         if any(r["output_tokens"] for r in rows) else None,
         "note": "No-skill policies (always one answer) score an expected outcome 0.5; balanced accuracy 0.5 is chance.",
