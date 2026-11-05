@@ -9,8 +9,8 @@ covariance and training metrics); ``clinical_tools.train_predictor`` writes it
 to disk. ``Predictor`` loads only that artifact, never the training data. At
 prediction time only age, AMH and Gn days are accepted; every other indicator,
 and any of the three that is not given, is set to its training mean. The answer
-is the probability and a 95% interval (Wald interval on the logit from the
-coefficient covariance).
+is the probability, a 95% interval (Wald interval on the logit from the
+coefficient covariance) and each given input's effect on the probability (see ``predict``).
 """
 
 from __future__ import annotations
@@ -144,7 +144,12 @@ class Predictor:
 
     def predict(self, **values: float | None) -> dict:
         """Probability and 95% interval; inputs not given, and every other indicator,
-        take their training means."""
+        take their training means.
+
+        Also returns each given input's effect: the change in probability when only that input moves
+        from its training mean to the patient's value, every other indicator at its mean. For a
+        logistic regression the inputs' log-odds contributions add up exactly; on the probability
+        scale the effects are close to, but not exactly, additive."""
         unknown = set(values) - set(INPUTS)
         if unknown:
             raise ValueError(f"unsupported inputs: {sorted(unknown)}")
@@ -158,4 +163,22 @@ class Predictor:
         logit = float(x @ self.beta)
         half = Z95 * math.sqrt(float(x @ self.cov @ x))
         expit = lambda z: 1 / (1 + math.exp(-z))
-        return {"妊娠概率": round(expit(logit), 3), "95%置信区间": [round(expit(logit - half), 3), round(expit(logit + half), 3)]}
+        effects = []
+        for name, value in given.items():
+            i = FEATURE_NAMES.index(INPUTS[name])
+            change = expit(self.beta[0] + self.beta[1 + i] * (value - self.means[i]) / self.scales[i]) - expit(self.beta[0])
+            effects.append({"输入": INPUTS[name], "取值": _round(value), "训练集均值": _round(self.means[i]),
+                            "方向": "升高" if change > 0.0005 else "降低" if change < -0.0005 else "基本不变",
+                            "概率变化": round(change, 3)})
+        return {
+            "妊娠概率": round(expit(logit), 3),
+            "95%置信区间": [round(expit(logit - half), 3), round(expit(logit + half), 3)],
+            "各输入的影响": effects,
+            "按训练集均值代替": [INPUTS[n] for n in INPUTS if n not in given] + [f"其余 {len(FEATURE_NAMES) - len(INPUTS)} 项指标"],
+            "影响说明": "概率变化 = 只把该项从训练集均值换成当前取值、其余指标保持均值时，妊娠概率的变化；"
+                    "是模型中的关联，不是因果。",
+        }
+
+
+def _round(value: float) -> float:
+    return round(float(value), 2)

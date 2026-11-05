@@ -123,7 +123,7 @@ def _tool_use(calls: list[dict[str, Any]], inputs: dict[str, Any]) -> dict[str, 
 
 def _faithfulness(answer: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
     returned = [n for c in calls for n in _numbers(_response(c))]
-    rates = set(ALLOWED_RATES) | {round(n * 100, 1) for n in returned if 0 <= n <= 1}
+    rates = set(ALLOWED_RATES) | {round(abs(n) * 100, 1) for n in returned if abs(n) <= 1}   # abs: probability changes
     counts = {int(n) for n in returned if n == int(n)} | {15}
     cited_rates = [float(x) for x in PERCENT.findall(answer)]
     cited_counts = [int(x) for x in COUNT.findall(answer)]

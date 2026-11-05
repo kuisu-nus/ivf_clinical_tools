@@ -219,19 +219,37 @@ class PredictorTests(unittest.TestCase):
         text = json.dumps(self.artifact, ensure_ascii=False)
         self.assertFalse([cid for cid in self.training.case_ids if f'"{cid}"' in text])
 
-    def test_output_is_only_probability_and_interval(self):
+    def test_output_is_probability_interval_and_input_effects(self):
         young = self.predictor.predict(age=26, amh=2.0, gn_days=10)
         old = self.predictor.predict(age=43, amh=2.0, gn_days=10)
         for r in (young, old):
-            self.assertEqual(set(r), {"妊娠概率", "95%置信区间"})
+            self.assertEqual(set(r), {"妊娠概率", "95%置信区间", "各输入的影响", "按训练集均值代替", "影响说明"})
             self.assertLessEqual(r["95%置信区间"][0], r["妊娠概率"])
             self.assertLessEqual(r["妊娠概率"], r["95%置信区间"][1])
+            self.assertEqual([e["输入"] for e in r["各输入的影响"]], ["女方年龄", "女方AMH", "女方用药Gn总天数"])
         self.assertGreater(young["妊娠概率"], old["妊娠概率"])
+        age_effect = lambda r: r["各输入的影响"][0]
+        weight = dict(zip(self.artifact["features"], self.artifact["weights"]))["女方年龄"]
+        # each effect follows the sign of its coefficient times the distance from the training mean
+        self.assertEqual(age_effect(young)["概率变化"] > 0, weight * (26 - age_effect(young)["训练集均值"]) > 0)
+        self.assertEqual(age_effect(old)["方向"], "降低" if weight * (43 - age_effect(old)["训练集均值"]) < 0 else "升高")
+        # the effects explain the probability: on the logit scale they add up exactly
+        logit = lambda p: np.log(p / (1 - p))
+        p0 = 1 / (1 + np.exp(-self.artifact["intercept"]))
+        total = logit(p0) + sum(logit(p0 + e["概率变化"]) - logit(p0) for e in young["各输入的影响"])
+        self.assertAlmostEqual(1 / (1 + np.exp(-total)), young["妊娠概率"], places=2)
+
+    def test_inputs_not_given_are_listed_as_at_the_mean(self):
+        r = self.predictor.predict(age=33)
+        self.assertEqual([e["输入"] for e in r["各输入的影响"]], ["女方年龄"])
+        self.assertEqual(r["按训练集均值代替"][:2], ["女方AMH", "女方用药Gn总天数"])
+        self.assertEqual(r["按训练集均值代替"][-1], f"其余 {len(FEATURE_NAMES) - 3} 项指标")
 
     def test_other_indicators_and_missing_inputs_use_training_means(self):
         means = dict(zip(self.artifact["features"], self.artifact["means"]))
-        self.assertEqual(self.predictor.predict(age=33),
-                         self.predictor.predict(age=33, amh=means["女方AMH"], gn_days=means["女方用药Gn总天数"]))
+        core = lambda r: (r["妊娠概率"], r["95%置信区间"])
+        self.assertEqual(core(self.predictor.predict(age=33)),
+                         core(self.predictor.predict(age=33, amh=means["女方AMH"], gn_days=means["女方用药Gn总天数"])))
         at_means = self.predictor.predict(age=means["女方年龄"])   # every input at its mean: the intercept alone
         self.assertAlmostEqual(at_means["妊娠概率"], 1 / (1 + np.exp(-self.artifact["intercept"])), places=3)
         for bad in ({}, {"age": None}, {"fsh": 8}):
@@ -368,7 +386,8 @@ class ApiTests(ServiceEnv):
     def test_predict_endpoint_and_validation(self):
         with TestClient(predict_server.app) as client:
             ok = client.post("/ivf/predict_outcome", json={"age": 30, "amh": 2.0, "gn_days": 10})
-            self.assertEqual((ok.status_code, set(ok.json())), (200, {"妊娠概率", "95%置信区间"}))
+            self.assertEqual((ok.status_code, set(ok.json())),
+                             (200, {"妊娠概率", "95%置信区间", "各输入的影响", "按训练集均值代替", "影响说明"}))
             self.assertEqual(client.post("/ivf/predict_outcome", json={"amh": 2.0}).status_code, 200)
             for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True}):
                 self.assertEqual(client.post("/ivf/predict_outcome", json=bad).status_code, 422, bad)
