@@ -12,7 +12,7 @@
       },
       "amh": {
         "type": "number",
-        "description": "当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填，只按年龄检索",
+        "description": "当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填（也不要填 0），只按年龄检索",
         "minimum": 0,
         "maximum": 50
       },

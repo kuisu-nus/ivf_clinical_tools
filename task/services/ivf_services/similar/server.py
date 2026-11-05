@@ -50,7 +50,7 @@ class SimilarPatientsRequest(BaseModel):
 
     age: float = Field(..., ge=18, le=55, description="当前患者女方年龄（岁）")
     amh: float | None = Field(None, ge=0, le=50,
-                              description="当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填，只按年龄检索")
+                              description="当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填（也不要填 0），只按年龄检索")
     age_window: int = Field(AGE_WINDOW[0], ge=AGE_WINDOW[0], le=AGE_WINDOW[1],
                             description="年龄上下浮动的岁数，默认 1")
     strategy: str = Field(DEFAULT_STRATEGY, json_schema_extra={"enum": list(STRATEGIES)},
@@ -64,6 +64,15 @@ class SimilarPatientsRequest(BaseModel):
     def not_boolean(cls, value: Any) -> Any:
         if isinstance(value, bool):
             raise ValueError("必须是数值，不能是 true/false")
+        return value
+
+    @field_validator("amh", mode="before")
+    @classmethod
+    def amh_not_zero(cls, value: Any) -> Any:
+        # The lowest measured AMH is 0.02 (assay floor); a 0 is a missing AMH filled in by hand,
+        # which would put the patient in the low band. Leave it out to match on age alone.
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0:
+            raise ValueError("AMH 不能为 0：病例未提供 AMH 时不要传这个参数（只按年龄检索），不要用 0 代替")
         return value
 
     @field_validator("strategy")

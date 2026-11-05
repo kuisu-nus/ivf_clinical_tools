@@ -383,6 +383,9 @@ class ApiTests(ServiceEnv):
             ok = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
             self.assertEqual(ok.status_code, 200)
             self.assertFalse(ok.json()["拒绝统计"])
+            zero = client.post("/ivf/similar_patients", json={"age": 30, "amh": 0})     # 0 is not "missing"
+            self.assertEqual(zero.status_code, 422)
+            self.assertIn("不要用 0 代替", json.dumps(zero.json(), ensure_ascii=False))
             age_only = client.post("/ivf/similar_patients", json={"age": 30})      # AMH optional
             self.assertEqual(age_only.status_code, 200)
             self.assertIn("未提供 AMH", age_only.json()["筛选条件"])
@@ -397,7 +400,7 @@ class ApiTests(ServiceEnv):
             self.assertEqual(client.post("/ivf/similar_patients", content=b"{not json",
                                          headers={"Content-Type": "application/json"}).status_code, 422)
             calls = client.get("/ivf/audit").json()["calls"]
-            self.assertEqual([c["status"] for c in calls][:3], [200, 200, 422])
+            self.assertEqual([c["status"] for c in calls][:4], [200, 422, 200, 422])
             self.assertEqual(calls[0]["request_body"]["age"], 30)
             health = client.get("/health").json()
             self.assertEqual((health["status"], health["tool"], health["cases"]), ("ok", "ivf_similar_patients", 400))
@@ -426,7 +429,8 @@ class ApiTests(ServiceEnv):
             from clinical_tools.predict import INPUTS
             self.assertEqual(set(predict_server.PredictOutcomeRequest.model_fields), set(INPUTS))   # service = predictor
             for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True},
-                        {"sperm_survival": 120}, {"pt": True}):
+                        {"sperm_survival": 120}, {"pt": True}, {"age": 30, "amh": 0}, {"age": 30, "sperm_survival": 0},
+                        {"age": 30, "post_wash_im": 0.0}, {"age": 30, "pt": 0}):
                 self.assertEqual(client.post("/ivf/predict_outcome", json=bad).status_code, 422, bad)
             self.assertEqual(client.get("/health").json()["tool"], "ivf_predict_outcome")
 

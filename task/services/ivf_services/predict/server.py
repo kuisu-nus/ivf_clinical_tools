@@ -38,10 +38,13 @@ DEFAULT_MODEL = Path(__file__).resolve().parent.parent.parent / "models" / "lr_3
 TOOL_DESCRIPTION = (
     "预测当前患者本次移植的临床妊娠概率及 95% 置信区间。模型为在 35 项指标上训练的逻辑回归，"
     "预测时接收女方年龄、AMH、Gn 用药总天数，以及模型中系数较大的女方凝血 PT、TT、白细胞计数、"
-    "男方精子存活率、精液处理后 IM（至少提供一项；病例未提供的指标不要填），其余指标及未提供的指标按训练集均值代替。"
+    "男方精子存活率、精液处理后 IM（至少提供一项；病例未提供的指标不要传，也不要填 0），其余指标及未提供的指标按训练集均值代替。"
     "同时返回每个输入对概率的影响（只把该项从训练集均值换成当前取值时，概率升高或降低多少）。"
     "模型区分能力有限（交叉验证 AUC 约 0.6），置信区间只反映模型系数的不确定性，不是个体结局的范围。"
 )
+
+
+ZERO_IS_MISSING = "0 不是有效值：病例未提供该指标时不要传这个参数（缺失按训练集均值处理），不要用 0 代替"
 
 
 class PredictOutcomeRequest(BaseModel):
@@ -61,6 +64,10 @@ class PredictOutcomeRequest(BaseModel):
     def not_boolean(cls, value: Any) -> Any:
         if isinstance(value, bool):
             raise ValueError("必须是数值，不能是 true/false")
+        # A missing indicator is left out, never 0: in the cleaned data 0 marks a missing value
+        # (e.g. an all-zero semen analysis), and the model treats a missing input as the training mean.
+        if isinstance(value, (int, float)) and value == 0:
+            raise ValueError(ZERO_IS_MISSING)
         return value
 
     @model_validator(mode="after")
