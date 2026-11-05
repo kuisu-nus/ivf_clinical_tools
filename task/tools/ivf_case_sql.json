@@ -1,0 +1,25 @@
+{
+  "name": "ivf_case_sql",
+  "description": "在去掉病例编号的 IVF-ET 训练病例库上执行一条只读 SQL（SQLite 语法，只允许 SELECT）。表 cases：每行一个训练病例，列为 35 项指标和 pregnant（1 妊娠，0 未妊娠），缺失为 NULL；表 fields：列名与中文指标名对照。列名：age（女方年龄）、fsh（女方基础FSH）、prl（女方基础PRL）、testosterone（女方基础T）、progesterone（女方基础P）、amh（女方AMH）、wbc（女方白细胞计数）、platelets（女方血小板）、hematocrit（女方血细胞压积）、pt（女方凝血常规PT）、aptt（女方凝血常规APPT）、tt（女方凝血常规TT）、d_dimer（女方D二聚体）、tpo（女方甲功TPO）、glucose（女方空腹血糖）、uric_acid（女方肾功尿酸）、m_concentration（男方浓度）、m_normal_morphology（男方正常形态率）、m_pr（男方PR）、m_np（男方NP）、m_survival（男方存活率）、m_dfi（男方DFI）、m_alt（男方ALT）、m_ast（男方AST）、m_creatinine（男方血肌酐）、m_wbc（男方白细胞）、m_platelets（男方血小板）、m_glucose（男方空腹血糖）、gn_days（女方用药Gn总天数）、hcg_day_p（女方用药HCG日P）、wash_np（男方精液处理后NP）、wash_method（男方精液处理方法）、wash_density（男方精液处理后密度）、wash_pr（男方精液处理后PR）、wash_im（男方精液处理后IM）。最多返回 200 行，单次查询超过 2 秒中止；尽量用 COUNT、AVG、GROUP BY 等聚合。例：SELECT CASE WHEN age < 35 THEN '<35' ELSE '≥35' END AS g, COUNT(*), AVG(pregnant) FROM cases GROUP BY g",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "sql": {
+        "type": "string",
+        "description": "一条只读 SELECT 语句（SQLite）",
+        "maxLength": 4000,
+        "minLength": 1
+      }
+    },
+    "required": [
+      "sql"
+    ],
+    "additionalProperties": false
+  },
+  "backend": {
+    "type": "http",
+    "service": "ivf_case_sql",
+    "method": "POST",
+    "url": "http://127.0.0.1:9204/ivf/case_sql"
+  }
+}

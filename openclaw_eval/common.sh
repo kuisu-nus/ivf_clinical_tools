@@ -9,6 +9,7 @@ MCP_NAME=claw-tools
 
 # Our own ports, so a service someone else started on 9201/9202 is never used by mistake.
 export IVF_SIMILAR_PORT="${IVF_SIMILAR_PORT:-9301}" IVF_PREDICT_PORT="${IVF_PREDICT_PORT:-9302}"
+export IVF_CASES_PORT="${IVF_CASES_PORT:-9303}" IVF_CASE_SQL_PORT="${IVF_CASE_SQL_PORT:-9304}"
 export OMNI_TASK_DIR="$WORK/run"                          # service pid files and logs (start/stop_services.sh)
 TOOLS_DIR="$WORK/tools"                                   # tool specs pointing at the ports above
 TRACE_DIR="$WORK/trace"                                   # dispatches.jsonl written by the MCP bridge

@@ -25,7 +25,8 @@ env_file, out, started = sys.argv[1], sys.argv[2], int(sys.argv[3])
 settings = dict(line.split("=", 1) for line in open(env_file, encoding="utf-8").read().split() if "=" in line)
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 health = {}
-for name, port in (("similar", os.environ["IVF_SIMILAR_PORT"]), ("predict", os.environ["IVF_PREDICT_PORT"])):
+for name, port in (("similar", os.environ["IVF_SIMILAR_PORT"]), ("predict", os.environ["IVF_PREDICT_PORT"]),
+                   ("cases", os.environ["IVF_CASES_PORT"]), ("case_sql", os.environ["IVF_CASE_SQL_PORT"])):
     with opener.open(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
         health[name] = json.loads(resp.read())
     if health[name]["uptime_seconds"] > time.time() - started + 5:
@@ -34,8 +35,9 @@ for name, port in (("similar", os.environ["IVF_SIMILAR_PORT"]), ("predict", os.e
 model = settings.get("IVF_MODEL_NAME", "lr_35_indicators.json")
 if health["predict"]["model"] != model:
     sys.exit(f"prediction service uses {health['predict']['model']}, expected {model}")
-if "IVF_EXCLUDE_CASE" in settings and "排除" not in health["similar"]["scope"]:
-    sys.exit(f"similar-patient service does not hold out the case: {health['similar']['scope']}")
+for name in ("similar", "cases", "case_sql"):
+    if "IVF_EXCLUDE_CASE" in settings and "排除" not in health[name]["scope"]:
+        sys.exit(f"{name} service does not hold out the case: {health[name]['scope']}")
 json.dump({"service_env": settings, "health": health}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 print(f"services ready: {health['similar']['scope']} ({health['similar']['cases']} cases), model {model}")
 PY

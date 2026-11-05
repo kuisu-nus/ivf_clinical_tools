@@ -34,7 +34,8 @@ rm -f "$H/.openclaw/workspace/BOOTSTRAP.md"
 cat > "$H/env.sh" <<ENV
 export HOME=$H PYTHONUSERBASE=$OC_SOURCE_HOME/.local OC_LOCAL=1 OC_EVAL_WORK=$H/work
 export IVF_SIMILAR_PORT=$TOOL_PORT IVF_PREDICT_PORT=$((TOOL_PORT + 1)) OMNI_TASK_DIR=$H/work/run
+export IVF_CASES_PORT=$((TOOL_PORT + 2)) IVF_CASE_SQL_PORT=$((TOOL_PORT + 3))
 ENV
 (source "$H/env.sh" && "${OPENCLAW_BIN:-openclaw}" config validate >/dev/null && bash "$REPO/openclaw_eval/prepare.sh") 2>&1 | tail -n 2
-echo "ready: $H (model $OC_PROVIDER/$MODEL_ID on port $MODEL_PORT, tools on $TOOL_PORT/$((TOOL_PORT + 1)))"
+echo "ready: $H (model $OC_PROVIDER/$MODEL_ID on port $MODEL_PORT, tools on $TOOL_PORT–$((TOOL_PORT + 3)))"
 echo "try it: (source $H/env.sh && openclaw agent --local --session-id test --message '你好')"

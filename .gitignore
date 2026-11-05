@@ -11,6 +11,8 @@ runs/
 task/services/data/*
 # Shareable training file: public dataset, only age / AMH / Gn days per case (clinical_tools.public_data)
 !task/services/data/train_age_amh_gn.csv
+# Case database for the agent: public dataset, 1132 cleaned training cases without IDs (clinical_tools.case_db)
+!task/services/data/train_cases_35.csv
 trace/
 dispatches.jsonl
 .mcp.json

@@ -571,7 +571,7 @@ class LiveServiceTests(ServiceEnv):
                                  encoding="utf-8")   # the bridge speaks UTF-8; Windows defaults to GBK
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
             self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]],
-                             ["ivf_predict_outcome", "ivf_similar_patients"])
+                             ["ivf_case_sql", "ivf_predict_outcome", "ivf_query_cases", "ivf_similar_patients"])
             self.assertTrue(json.loads(replies[3]["result"]["content"][0]["text"])["拒绝统计"])
             self.assertIn("妊娠概率", json.loads(replies[4]["result"]["content"][0]["text"]))
             self.assertTrue(replies[5]["result"]["isError"])
@@ -589,7 +589,8 @@ class SpecTests(unittest.TestCase):
             for key in committed["input_schema"]["properties"]:
                 self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")   # Claude Code drops tools with other names
         ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in specs.tool_specs()}
-        self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202"})
+        self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202",
+                                 "ivf_query_cases": "9203", "ivf_case_sql": "9204"})
         self.assertEqual((TASK / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8"),
                          specs.system_prompt_prefix())
 

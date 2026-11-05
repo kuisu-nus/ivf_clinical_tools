@@ -1,0 +1,200 @@
+{
+  "name": "ivf_query_cases",
+  "description": "查询去掉病例编号的 IVF-ET 训练病例库（35 项指标和临床妊娠结局）：按任意指标的条件筛选人群，可再按某个指标分段统计各段的妊娠率，并查看指标在人群中（以及妊娠者、未妊娠者中）的分布。适合自己探索哪些指标、在什么范围内与结局相关，以及当前患者所在人群的情况。人群或分段少于 15 例时不报告妊娠率。病例未提供的指标不要拿来筛选，不要编造数值。",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "filters": {
+        "type": "array",
+        "description": "筛选条件（同时满足），不填表示全部可见病例",
+        "items": {
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "string",
+              "description": "指标名（训练数据中的中文指标名，如 女方AMH）",
+              "enum": [
+                "女方年龄",
+                "女方基础FSH",
+                "女方基础PRL",
+                "女方基础T",
+                "女方基础P",
+                "女方AMH",
+                "女方白细胞计数",
+                "女方血小板",
+                "女方血细胞压积",
+                "女方凝血常规PT",
+                "女方凝血常规APPT",
+                "女方凝血常规TT",
+                "女方D二聚体",
+                "女方甲功TPO",
+                "女方空腹血糖",
+                "女方肾功尿酸",
+                "男方浓度",
+                "男方正常形态率",
+                "男方PR",
+                "男方NP",
+                "男方存活率",
+                "男方DFI",
+                "男方ALT",
+                "男方AST",
+                "男方血肌酐",
+                "男方白细胞",
+                "男方血小板",
+                "男方空腹血糖",
+                "女方用药Gn总天数",
+                "女方用药HCG日P",
+                "男方精液处理后NP",
+                "男方精液处理方法",
+                "男方精液处理后密度",
+                "男方精液处理后PR",
+                "男方精液处理后IM"
+              ]
+            },
+            "op": {
+              "type": "string",
+              "description": "比较方式；between 需要 value 和 value2（含两端）；missing / present 表示该指标缺失 / 有记录",
+              "enum": [
+                ">",
+                ">=",
+                "<",
+                "<=",
+                "=",
+                "between",
+                "missing",
+                "present"
+              ]
+            },
+            "value": {
+              "type": "number",
+              "description": "比较值"
+            },
+            "value2": {
+              "type": "number",
+              "description": "between 的上界"
+            }
+          },
+          "required": [
+            "field",
+            "op"
+          ],
+          "additionalProperties": false
+        },
+        "maxItems": 10
+      },
+      "group_by": {
+        "type": "object",
+        "description": "按某个指标分段，统计每段的例数和妊娠率",
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "分段的指标名",
+            "enum": [
+              "女方年龄",
+              "女方基础FSH",
+              "女方基础PRL",
+              "女方基础T",
+              "女方基础P",
+              "女方AMH",
+              "女方白细胞计数",
+              "女方血小板",
+              "女方血细胞压积",
+              "女方凝血常规PT",
+              "女方凝血常规APPT",
+              "女方凝血常规TT",
+              "女方D二聚体",
+              "女方甲功TPO",
+              "女方空腹血糖",
+              "女方肾功尿酸",
+              "男方浓度",
+              "男方正常形态率",
+              "男方PR",
+              "男方NP",
+              "男方存活率",
+              "男方DFI",
+              "男方ALT",
+              "男方AST",
+              "男方血肌酐",
+              "男方白细胞",
+              "男方血小板",
+              "男方空腹血糖",
+              "女方用药Gn总天数",
+              "女方用药HCG日P",
+              "男方精液处理后NP",
+              "男方精液处理方法",
+              "男方精液处理后密度",
+              "男方精液处理后PR",
+              "男方精液处理后IM"
+            ]
+          },
+          "cuts": {
+            "type": "array",
+            "description": "分段点，例如 [30, 35, 40] 分为 <30、30–35、35–40、≥40 四段",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 9,
+            "minItems": 1
+          }
+        },
+        "required": [
+          "field",
+          "cuts"
+        ],
+        "additionalProperties": false
+      },
+      "describe": {
+        "type": "array",
+        "description": "要查看分布的指标（中位数、四分位数、缺失数，以及妊娠者与未妊娠者的中位数）",
+        "items": {
+          "type": "string",
+          "enum": [
+            "女方年龄",
+            "女方基础FSH",
+            "女方基础PRL",
+            "女方基础T",
+            "女方基础P",
+            "女方AMH",
+            "女方白细胞计数",
+            "女方血小板",
+            "女方血细胞压积",
+            "女方凝血常规PT",
+            "女方凝血常规APPT",
+            "女方凝血常规TT",
+            "女方D二聚体",
+            "女方甲功TPO",
+            "女方空腹血糖",
+            "女方肾功尿酸",
+            "男方浓度",
+            "男方正常形态率",
+            "男方PR",
+            "男方NP",
+            "男方存活率",
+            "男方DFI",
+            "男方ALT",
+            "男方AST",
+            "男方血肌酐",
+            "男方白细胞",
+            "男方血小板",
+            "男方空腹血糖",
+            "女方用药Gn总天数",
+            "女方用药HCG日P",
+            "男方精液处理后NP",
+            "男方精液处理方法",
+            "男方精液处理后密度",
+            "男方精液处理后PR",
+            "男方精液处理后IM"
+          ]
+        },
+        "maxItems": 10
+      }
+    },
+    "additionalProperties": false
+  },
+  "backend": {
+    "type": "http",
+    "service": "ivf_cases",
+    "method": "POST",
+    "url": "http://127.0.0.1:9203/ivf/query_cases"
+  }
+}

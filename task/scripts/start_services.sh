@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Start the two IVF tool services (FastAPI, one process each) and wait until both answer /health.
+# Start the four IVF tool services (FastAPI, one process each) and wait until all answer /health.
 #   similar patients  port ${IVF_SIMILAR_PORT:-9201}  reads IVF_TRAIN_CSV (default: services/data/train_age_amh_gn.csv, in the repo)
 #   pregnancy predict port ${IVF_PREDICT_PORT:-9202}  reads IVF_MODEL (default: services/models/$IVF_MODEL_NAME,
 #                                                     IVF_MODEL_NAME default lr_35_indicators.json; fold models for RL)
-#   IVF_EXCLUDE_CASE  training case under evaluation; its fold is hidden from the similar-patient tool
+#   case queries      port ${IVF_CASES_PORT:-9203}     reads IVF_CASE_TABLE (default: services/data/train_cases_35.csv, no IDs)
+#   case SQL          port ${IVF_CASE_SQL_PORT:-9204}  same table, read-only SQL
+#   IVF_EXCLUDE_CASE  training case under evaluation; its fold is hidden from the similar-patient and case tools
 #   IVF_LOG_DIR       rotating service logs (default: $OMNI_TASK_DIR/logs); see services/ivf_services/_base.py
 #   PYTHON            default python3 (needs numpy, fastapi, uvicorn: requirements.txt)
 set -euo pipefail
@@ -15,12 +17,15 @@ fi
 TASK_DIR="${OMNI_TASK_DIR:-/tmp/omni_task}"
 PYTHON="${PYTHON:-python3}"
 export IVF_SIMILAR_PORT="${IVF_SIMILAR_PORT:-9201}" IVF_PREDICT_PORT="${IVF_PREDICT_PORT:-9202}"
+export IVF_CASES_PORT="${IVF_CASES_PORT:-9203}" IVF_CASE_SQL_PORT="${IVF_CASE_SQL_PORT:-9204}"
+export IVF_CASE_TABLE="${IVF_CASE_TABLE:-$SERVICES_DIR/data/train_cases_35.csv}"
 export IVF_TRAIN_CSV="${IVF_TRAIN_CSV:-$SERVICES_DIR/data/train_age_amh_gn.csv}"
 export IVF_MODEL="${IVF_MODEL:-$SERVICES_DIR/models/${IVF_MODEL_NAME:-lr_35_indicators.json}}"
 export IVF_LOG_DIR="${IVF_LOG_DIR:-$TASK_DIR/logs}"
 export PYTHONPATH="$SERVICES_DIR${PYTHONPATH:+:$PYTHONPATH}"
 [ -f "$IVF_TRAIN_CSV" ] || { echo "training CSV not found: $IVF_TRAIN_CSV (set IVF_TRAIN_CSV)" >&2; exit 1; }
 [ -f "$IVF_MODEL" ] || { echo "model artifact not found: $IVF_MODEL (set IVF_MODEL)" >&2; exit 1; }
+[ -f "$IVF_CASE_TABLE" ] || { echo "case table not found: $IVF_CASE_TABLE (set IVF_CASE_TABLE)" >&2; exit 1; }
 "$PYTHON" -c "import numpy, fastapi, pydantic, uvicorn" 2>/dev/null \
   || { echo "missing packages: pip install -r requirements.txt (numpy, fastapi, uvicorn)" >&2; exit 1; }
 mkdir -p "$TASK_DIR" "$IVF_LOG_DIR"
@@ -32,8 +37,10 @@ start() {  # name server-directory
 }
 start ivf_similar similar
 start ivf_predict predict
+start ivf_cases cases
+start ivf_case_sql case_sql
 
-"$PYTHON" - "$IVF_SIMILAR_PORT" "$IVF_PREDICT_PORT" <<'PY'
+"$PYTHON" - "$IVF_SIMILAR_PORT" "$IVF_PREDICT_PORT" "$IVF_CASES_PORT" "$IVF_CASE_SQL_PORT" <<'PY'
 import sys, time, urllib.request
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for port in sys.argv[1:]:

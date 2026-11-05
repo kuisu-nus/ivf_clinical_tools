@@ -14,7 +14,9 @@ param(
     [string]$Model = $env:IVF_MODEL,
     [switch]$Lan,
     [int]$SimilarPort = 9201,
-    [int]$PredictPort = 9202
+    [int]$PredictPort = 9202,
+    [int]$CasesPort = 9203,
+    [int]$CaseSqlPort = 9204
 )
 # Errors are checked explicitly: with "Stop", Windows PowerShell 5.1 aborts on any stderr line of python.
 $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -45,7 +47,7 @@ $TrainCsv = (Resolve-Path $TrainCsv -ErrorAction Stop).Path
 $Model = (Resolve-Path $Model -ErrorAction Stop).Path
 
 New-Item -ItemType Directory -Force -Path $RunDir, $LogDir -ErrorAction Stop | Out-Null
-foreach ($name in @("ivf_similar", "ivf_predict")) {
+foreach ($name in @("ivf_similar", "ivf_predict", "ivf_cases", "ivf_case_sql")) {
     $pidFile = Join-Path $RunDir "service-$name.pid"
     if (Test-Path $pidFile) {
         $old = Get-Process -Id ([int](Get-Content $pidFile)) -ErrorAction SilentlyContinue
@@ -61,6 +63,8 @@ $env:IVF_MODEL = $Model
 $env:IVF_LOG_DIR = $LogDir
 $env:IVF_SIMILAR_PORT = "$SimilarPort"
 $env:IVF_PREDICT_PORT = "$PredictPort"
+$env:IVF_CASES_PORT = "$CasesPort"
+$env:IVF_CASE_SQL_PORT = "$CaseSqlPort"
 $env:IVF_TOOLS_HOST = $(if ($Lan) { "0.0.0.0" } else { "127.0.0.1" })
 $env:PYTHONIOENCODING = "utf-8"
 
@@ -79,6 +83,8 @@ function Start-IvfService([string]$Name, [string]$Folder) {
 }
 Start-IvfService "ivf_similar" "similar"
 Start-IvfService "ivf_predict" "predict"
+Start-IvfService "ivf_cases" "cases"
+Start-IvfService "ivf_case_sql" "case_sql"
 
 # Wait for both /health endpoints (no proxy, so a system proxy or TUN cannot get in the way).
 $check = @"
@@ -98,9 +104,9 @@ for port in sys.argv[1:]:
                 sys.exit(1)
             time.sleep(0.5)
 "@
-& $Python -c $check $SimilarPort $PredictPort
+& $Python -c $check $SimilarPort $PredictPort $CasesPort $CaseSqlPort
 if ($LASTEXITCODE -ne 0) {
-    foreach ($name in @("ivf_similar", "ivf_predict")) {
+    foreach ($name in @("ivf_similar", "ivf_predict", "ivf_cases", "ivf_case_sql")) {
         Write-Host "--- last lines of $RunDir/service-$name.err.log ---" -ForegroundColor Yellow
         Get-Content (Join-Path $RunDir "service-$name.err.log") -Tail 8 -ErrorAction SilentlyContinue
     }

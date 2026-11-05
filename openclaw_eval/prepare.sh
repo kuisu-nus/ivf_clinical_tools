@@ -23,7 +23,9 @@ import os, sys
 from pathlib import Path
 from ivf_services.specs import write_specs
 urls = {"ivf_similar_patients": f"http://127.0.0.1:{os.environ['IVF_SIMILAR_PORT']}",
-        "ivf_predict_outcome": f"http://127.0.0.1:{os.environ['IVF_PREDICT_PORT']}"}
+        "ivf_predict_outcome": f"http://127.0.0.1:{os.environ['IVF_PREDICT_PORT']}",
+        "ivf_query_cases": f"http://127.0.0.1:{os.environ['IVF_CASES_PORT']}",
+        "ivf_case_sql": f"http://127.0.0.1:{os.environ['IVF_CASE_SQL_PORT']}"}
 for path in write_specs(Path(sys.argv[1]), urls):
     print("  ", path)
 PY

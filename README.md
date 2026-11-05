@@ -38,13 +38,14 @@ tasks/<task_id>/
 |---|---|
 | 目标一：相似患者检索 `ivf_similar_patients` | 已完成：独立服务（端口 9201），URL 测试通过 |
 | 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：35 项指标训练、预测接收 8 项输入（年龄、AMH、Gn 天数和系数最大的 5 项），训练与预测分离，独立服务（端口 9202），URL 测试通过 |
+| 病例数据库 `ivf_query_cases`、`ivf_case_sql` | 1132 例训练病例（35 项指标和结局，无病例编号）供 agent 自行探索：结构化查询（端口 9203）和只读 SQL（端口 9204） |
 | 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code 自主调用两个服务并比较结果，调用轨迹写入 `dispatches.jsonl` |
 | 服务实现 | FastAPI + Pydantic；计算在固定大小的线程池中异步执行，并发有上限；日志写入文件并滚动；检索策略和返回字段可扩展 |
 
 ### 仓库结构（本仓库即一个任务目录）
 
 ```markdown
-├── task.json                        # 任务元数据、两个服务、grader 配置、文件映射
+├── task.json                        # 任务元数据、四个服务、grader 配置、文件映射
 ├── task/
 │   ├── prompt.md                    # 示例病例（三阶段格式）：虚构患者 38 岁、AMH 0.9、Gn 10 天
 │   ├── scripts/                     # start_services.sh 分别启动两个服务；stop_services.sh；setup.sh
@@ -53,6 +54,8 @@ tasks/<task_id>/
 │   │   ├── ivf_services/            # HTTP 服务（FastAPI），结构同模板 mock_services/<name>/server.py
 │   │   │   ├── similar/server.py    #   服务一：相似患者（9201）：请求模型、接口、读训练数据
 │   │   │   ├── predict/server.py    #   服务二：妊娠预测（9202）：请求模型、接口、只读模型文件
+│   │   │   ├── cases/server.py      #   服务三：病例数据库结构化查询（9203）
+│   │   │   ├── case_sql/server.py   #   服务四：病例数据库只读 SQL（9204）
 │   │   │   ├── _base.py             #   两个服务共用：日志、有上限的计算线程池、audit/reset/health、错误处理
 │   │   │   └── specs.py             #   由请求模型生成 task/tools 工具规格和 system prompt 的工具部分
 │   │   ├── clinical_tools/          # 计算逻辑，只依赖 numpy，不涉及 Web
@@ -61,6 +64,7 @@ tasks/<task_id>/
 │   │   │   ├── similar.py           #   相似患者检索：可替换的检索策略 + 统一的门槛与统计
 │   │   │   ├── predict.py           #   逻辑回归：train_model（35 项训练）与 Predictor（三项输入预测）
 │   │   │   ├── train_predictor.py   #   训练脚本：训练数据 → 模型文件
+│   │   │   ├── case_db.py           #   病例数据库：生成无编号病例表、查询与只读 SQL
 │   │   │   └── public_data.py       #   生成仓库中的训练集（只保留三项输入）
 │   │   ├── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
 │   │   ├── models/lr_35_indicators_fold{0-4}.json  # 各自去掉一折训练的模型（RL 时用，避免病例看到自己）
@@ -130,6 +134,14 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 - 三项输入在原始尺度上的系数（对数几率）：年龄 −0.061/岁，AMH +0.015/(ng/mL)，Gn +0.211/天。
 - 注意：Gn 用药总天数在数据中只有 8–12 天五个取值，疑似被截断；年龄线性进入，对 37 岁以后妊娠率加速下降刻画不足。
 - agentic RL 时如需排除被评估病例，用 `train_predictor --exclude-case <ID>` 另训一个模型文件。
+
+### 服务三、四：病例数据库 `ivf_query_cases`（9203）、`ivf_case_sql`（9204）
+
+让 agent 自己探索训练病例：哪些指标、在什么范围内和结局相关，当前患者所在人群是什么情况。数据是 `task/services/data/train_cases_35.csv`：1132 例训练病例按工具相同的规则清洗后的 35 项指标和结局（公开数据），由 `python -m clinical_tools.case_db --source <训练集CSV> --out task/services/data/train_cases_35.csv` 生成。
+
+- **防止结局泄露**：表里没有病例编号，行顺序按编号的哈希打乱（这个数据集里编号和行顺序本身就能分出结局）；283 例测试集不在表中。每行带一个 agent 看不到的 `fold` 列：设了 `IVF_EXCLUDE_CASE` 时（RL 训练），服务启动时按 `train_age_amh_gn.csv` 查出该病例的折并整折去掉，和相似患者工具、折外预测模型排除的是同一折。
+- **`ivf_query_cases`**：`filters`（任意指标，`> >= < <= = between missing present`，同时满足）、`group_by`（按某指标分段统计妊娠率）、`describe`（指标分布及妊娠者 / 未妊娠者中位数）。少于 15 例不报告妊娠率。
+- **`ivf_case_sql`**：一条只读 SELECT（SQLite），表 `cases`（35 列英文列名 + `pregnant`）和 `fields`（列名与中文指标名对照）。数据库在内存中，只含可见病例；写入、ATTACH、PRAGMA 被拒绝，查询超过 2 秒中止，最多返回 200 行。
 
 ### 服务实现
 
