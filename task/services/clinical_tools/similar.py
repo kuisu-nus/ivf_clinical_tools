@@ -45,7 +45,7 @@ def amh_band(value: float) -> tuple[float, float, str]:
 class Query:
     """The current patient and retrieval settings (validated by the service)."""
     age: float
-    amh: float
+    amh: float | None = None         # not given: match on age alone
     age_window: int = AGE_WINDOW[0]
 
 
@@ -73,12 +73,24 @@ class SimilarityStrategy:
 
 
 class AgeAmhBand(SimilarityStrategy):
-    """Female age within ±age_window years and AMH in the same band."""
+    """Female age within ±age_window years and AMH in the same band; without AMH, age alone."""
     name = "age_amh_band"
-    description = "女方年龄 ±age_window 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL）"
+    description = ("女方年龄 ±age_window 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL）；"
+                   "未提供 AMH 时只按年龄检索")
 
     def select(self, cohort: SimilarCohort, query: Query) -> Selection:
         age, amh = cohort.column("女方年龄"), cohort.column("女方AMH")
+        widen_hint = ("可以放宽年龄窗口（最大 3 岁）后重新检索；仍不足时说明相似人群证据不足"
+                      if query.age_window < AGE_WINDOW[1] else "已是最大年龄窗口，应说明相似人群证据不足")
+        if query.amh is None:        # never invent an AMH: an AMH band the patient may not be in misleads
+            searchable = ~np.isnan(age)
+            with np.errstate(invalid="ignore"):
+                matched = searchable & (np.abs(age - query.age) <= query.age_window)
+                distance = np.abs(age - query.age)
+            return Selection(
+                criteria=f"女方年龄 {query.age - query.age_window:g}–{query.age + query.age_window:g} 岁；"
+                         "未提供 AMH，未按 AMH 分档（含各档 AMH 的病例）",
+                searchable=searchable, matched=matched, distance=distance, widen_hint=widen_hint)
         low, high, band = amh_band(query.amh)
         floor = AMH_DETECTION_FLOOR
         searchable = ~np.isnan(age) & ~np.isnan(amh)
@@ -87,16 +99,17 @@ class AgeAmhBand(SimilarityStrategy):
             distance = np.abs(age - query.age) + np.abs(np.log(np.maximum(amh, floor)) - math.log(max(query.amh, floor)))
         return Selection(
             criteria=f"女方年龄 {query.age - query.age_window:g}–{query.age + query.age_window:g} 岁；AMH {band}",
-            searchable=searchable, matched=matched, distance=distance,
-            widen_hint="可以放宽年龄窗口（最大 3 岁）后重新检索；仍不足时说明相似人群证据不足"
-                       if query.age_window < AGE_WINDOW[1] else "已是最大年龄窗口，应说明相似人群证据不足")
+            searchable=searchable, matched=matched, distance=distance, widen_hint=widen_hint)
 
     def profile(self, cohort: SimilarCohort, index: np.ndarray) -> dict:
         age, amh = cohort.column("女方年龄")[index], cohort.column("女方AMH")[index]
+        missing = int(np.isnan(amh).sum())          # only when matched on age alone
+        amh = amh[~np.isnan(amh)]
         floor = int(np.isclose(amh, AMH_DETECTION_FLOOR).sum())
         return {
             "女方年龄中位数（范围）": f"{np.median(age):g}（{age.min():g}–{age.max():g}）",
-            "AMH中位数（范围）": f"{np.median(amh):.2f}（{amh.min():g}–{amh.max():g}）",
+            **({"AMH中位数（范围）": f"{np.median(amh):.2f}（{amh.min():g}–{amh.max():g}）"} if len(amh) else {}),
+            **({"AMH 未记录的病例数": missing} if missing else {}),
             **({"AMH=0.02 的病例数": floor, "AMH=0.02 说明": "可能是检测下限（<0.02）"} if floor else {}),
         }
 

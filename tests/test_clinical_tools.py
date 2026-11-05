@@ -136,6 +136,16 @@ class SimilarCohortTests(unittest.TestCase):
         self.assertTrue(all(abs(p["女方年龄"] - 30) <= 1 for p in result["相似患者"]))
         self.assertEqual(set(result["相似患者"][0]), {"女方年龄", "女方AMH", "妊娠结局"})
 
+    def test_without_amh_the_cohort_is_matched_on_age_alone(self):
+        result = self.cohort.query(Query(30))
+        age = self.training.matrix[:, COL["女方年龄"]]
+        mask = np.abs(age - 30) <= 1
+        self.assertEqual(result["符合条件例数"], int(mask.sum()))
+        self.assertIn("未提供 AMH", result["筛选条件"])
+        self.assertEqual(result["妊娠结局分布"]["临床妊娠"], int(self.training.labels[mask].sum()))
+        self.assertGreaterEqual(result["符合条件例数"], self.cohort.query(Query(30, 2.0))["符合条件例数"])
+        self.assertTrue(all(abs(p["女方年龄"] - 30) <= 1 for p in result["相似患者"]))
+
     def test_small_cohorts_are_refused_without_outcomes(self):
         result = self.cohort.query(Query(44, 0.15))
         self.assertLess(result["符合条件例数"], MIN_COHORT)
@@ -357,7 +367,11 @@ class ApiTests(ServiceEnv):
             ok = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
             self.assertEqual(ok.status_code, 200)
             self.assertFalse(ok.json()["拒绝统计"])
-            for bad in ({"age": 30}, {"age": "x", "amh": 1}, {"age": 30, "amh": -1}, {"age": 30, "amh": 1, "age_window": 4},
+            age_only = client.post("/ivf/similar_patients", json={"age": 30})      # AMH optional
+            self.assertEqual(age_only.status_code, 200)
+            self.assertIn("未提供 AMH", age_only.json()["筛选条件"])
+            self.assertGreaterEqual(age_only.json()["符合条件例数"], ok.json()["符合条件例数"])
+            for bad in ({"amh": 1}, {"age": "x", "amh": 1}, {"age": 30, "amh": -1}, {"age": 30, "amh": 1, "age_window": 4},
                         {"age": 30, "amh": 1, "age_window": 1.5}, {"age": 30, "amh": True}, {"age": 30, "amh": 1, "id": "0001"},
                         {"age": 30, "amh": 1, "strategy": "nope"}, {"age": 30, "amh": 1, "extra_fields": ["label"]},
                         {"age": 30, "amh": 1, "extra_fields": ["女方年龄"]}):
@@ -367,7 +381,7 @@ class ApiTests(ServiceEnv):
             self.assertEqual(client.post("/ivf/similar_patients", content=b"{not json",
                                          headers={"Content-Type": "application/json"}).status_code, 422)
             calls = client.get("/ivf/audit").json()["calls"]
-            self.assertEqual([c["status"] for c in calls][:2], [200, 422])
+            self.assertEqual([c["status"] for c in calls][:3], [200, 200, 422])
             self.assertEqual(calls[0]["request_body"]["age"], 30)
             health = client.get("/health").json()
             self.assertEqual((health["status"], health["tool"], health["cases"]), ("ok", "ivf_similar_patients", 400))

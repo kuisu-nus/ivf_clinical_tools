@@ -40,7 +40,7 @@ PORT_ENV, DEFAULT_PORT = "IVF_SIMILAR_PORT", 9201
 EXTRA_FIELDS = [f for f in FEATURE_NAMES if f not in LISTED_ALWAYS]
 TOOL_DESCRIPTION = (
     "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（默认策略：年龄 ±age_window 岁、AMH 同一档："
-    "<1.2 / 1.2–3.5 / >3.5 ng/mL），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。"
+    "<1.2 / 1.2–3.5 / >3.5 ng/mL；未提供 AMH 时只按年龄检索，不要自己填 AMH），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。"
     f"符合条件少于 {MIN_COHORT} 例时拒绝返回统计结果，只告知例数。"
 )
 
@@ -49,7 +49,8 @@ class SimilarPatientsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     age: float = Field(..., ge=18, le=55, description="当前患者女方年龄（岁）")
-    amh: float = Field(..., ge=0, le=50, description="当前患者女方 AMH（ng/mL）")
+    amh: float | None = Field(None, ge=0, le=50,
+                              description="当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填，只按年龄检索")
     age_window: int = Field(AGE_WINDOW[0], ge=AGE_WINDOW[0], le=AGE_WINDOW[1],
                             description="年龄上下浮动的岁数，默认 1")
     strategy: str = Field(DEFAULT_STRATEGY, json_schema_extra={"enum": list(STRATEGIES)},

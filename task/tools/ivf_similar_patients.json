@@ -1,6 +1,6 @@
 {
   "name": "ivf_similar_patients",
-  "description": "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（默认策略：年龄 ±age_window 岁、AMH 同一档：<1.2 / 1.2–3.5 / >3.5 ng/mL），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。符合条件少于 15 例时拒绝返回统计结果，只告知例数。",
+  "description": "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（默认策略：年龄 ±age_window 岁、AMH 同一档：<1.2 / 1.2–3.5 / >3.5 ng/mL；未提供 AMH 时只按年龄检索，不要自己填 AMH），返回相似患者的年龄、AMH 和临床妊娠结局分布（妊娠率及 95% 置信区间）。符合条件少于 15 例时拒绝返回统计结果，只告知例数。",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -12,7 +12,7 @@
       },
       "amh": {
         "type": "number",
-        "description": "当前患者女方 AMH（ng/mL）",
+        "description": "当前患者女方 AMH（ng/mL）；病例未提供 AMH 时不要填，只按年龄检索",
         "minimum": 0,
         "maximum": 50
       },
@@ -25,7 +25,7 @@
       },
       "strategy": {
         "type": "string",
-        "description": "检索策略。age_amh_band：女方年龄 ±age_window 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL）",
+        "description": "检索策略。age_amh_band：女方年龄 ±age_window 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL）；未提供 AMH 时只按年龄检索",
         "enum": [
           "age_amh_band"
         ],
@@ -41,8 +41,7 @@
       }
     },
     "required": [
-      "age",
-      "amh"
+      "age"
     ],
     "additionalProperties": false
   },
