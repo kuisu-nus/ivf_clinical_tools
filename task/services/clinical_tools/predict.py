@@ -1,5 +1,5 @@
 """Clinical pregnancy prediction: logistic regression trained on all 35 indicators,
-queried with age, AMH and Gn days only.
+queried with eight of them (age, AMH, Gn days and the five with the largest coefficients).
 
 Training and prediction are separate. ``train_model`` fits the model on the
 cleaned training set as before: all 35 indicators, missing values replaced by
@@ -7,8 +7,8 @@ training means, standardised, L2-penalised logistic regression (C = 1). It
 returns a JSON-serialisable artifact (means, scales, coefficients, their
 covariance and training metrics); ``clinical_tools.train_predictor`` writes it
 to disk. ``Predictor`` loads only that artifact, never the training data. At
-prediction time only age, AMH and Gn days are accepted; every other indicator,
-and any of the three that is not given, is set to its training mean. The answer
+prediction time only the INPUTS below are accepted (age, AMH, Gn days and five more); every
+other indicator, and any input that is not given, is set to its training mean. The answer
 is the probability, a 95% interval (Wald interval on the logit from the
 coefficient covariance) and each given input's effect on the probability (see ``predict``).
 """
@@ -26,7 +26,15 @@ from clinical_tools.cleaning import TrainingSet
 from clinical_tools.common import FEATURE_NAMES, assign_folds
 
 # Prediction inputs: argument name -> training column. Valid ranges are checked by the service.
-INPUTS = {"age": "女方年龄", "amh": "女方AMH", "gn_days": "女方用药Gn总天数"}
+# The first three are the original inputs; the other five are the indicators with the largest
+# coefficients in the full model (per standard deviation: PT -0.52, sperm survival +0.24, post-wash
+# IM +0.20, white cells -0.15, TT -0.13). The model is unchanged: it always used all 35 indicators.
+INPUTS = {"age": "女方年龄", "amh": "女方AMH", "gn_days": "女方用药Gn总天数",
+          "pt": "女方凝血常规PT", "tt": "女方凝血常规TT", "wbc": "女方白细胞计数",
+          "sperm_survival": "男方存活率", "post_wash_im": "男方精液处理后IM"}
+# Inputs of the cross-validation metric stored in the artifact ("three_inputs"); kept fixed so the
+# metric means the same in every artifact.
+CV_INPUTS = ("age", "amh", "gn_days")
 C = 1.0                          # inverse L2 strength on standardised coefficients, as the project LR
 CV_FOLDS, CV_REPEATS = 5, 5
 Z95 = 1.959964
@@ -87,7 +95,7 @@ class _Standardiser:
 
 def train_model(training: TrainingSet, *, scope: str = "全部训练病例") -> dict:
     raw, y = training.matrix, training.labels
-    inputs = [FEATURE_NAMES.index(column) for column in INPUTS.values()]
+    inputs = [FEATURE_NAMES.index(INPUTS[name]) for name in CV_INPUTS]
     standardiser = _Standardiser(raw)
     beta, cov = fit_logistic(standardiser.design(raw), y, ridge=1 / C)
     scores = {"all": ([], []), "inputs": ([], [])}
@@ -108,7 +116,7 @@ def train_model(training: TrainingSet, *, scope: str = "全部训练病例") -> 
         "artifact_version": ARTIFACT_VERSION,
         "model": "logistic_regression",
         "features": list(FEATURE_NAMES),
-        "inputs": dict(INPUTS),
+        "inputs": {name: INPUTS[name] for name in CV_INPUTS},
         "means": standardiser.means.round(10).tolist(),
         "scales": standardiser.scales.round(10).tolist(),
         "intercept": round(float(beta[0]), 10),
@@ -130,7 +138,7 @@ class Predictor:
     def __init__(self, artifact: dict):
         if artifact.get("artifact_version") != ARTIFACT_VERSION or artifact.get("model") != "logistic_regression":
             raise ValueError("Unsupported model artifact")
-        if list(artifact["features"]) != list(FEATURE_NAMES) or artifact["inputs"] != INPUTS:
+        if list(artifact["features"]) != list(FEATURE_NAMES) or not artifact["inputs"].items() <= INPUTS.items():
             raise ValueError("Model artifact features do not match this predictor")
         self.means = np.array(artifact["means"])
         self.scales = np.array(artifact["scales"])

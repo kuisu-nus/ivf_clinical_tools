@@ -249,11 +249,26 @@ class PredictorTests(unittest.TestCase):
         total = logit(p0) + sum(logit(p0 + e["概率变化"]) - logit(p0) for e in young["各输入的影响"])
         self.assertAlmostEqual(1 / (1 + np.exp(-total)), young["妊娠概率"], places=2)
 
+    def test_more_inputs_than_age_amh_gn(self):
+        from clinical_tools.predict import INPUTS
+        self.assertEqual(list(INPUTS)[:3], ["age", "amh", "gn_days"])
+        self.assertEqual(len(INPUTS), 8)
+        means = dict(zip(self.artifact["features"], self.artifact["means"]))
+        base = self.predictor.predict(age=33)
+        for name, column in list(INPUTS.items())[3:]:
+            r = self.predictor.predict(age=33, **{name: means[column] + 2 * dict(zip(self.artifact["features"],
+                                                                                    self.artifact["scales"]))[column]})
+            self.assertEqual(r["各输入的影响"][-1]["输入"], column)
+            weight = dict(zip(self.artifact["features"], self.artifact["weights"]))[column]
+            self.assertEqual(r["妊娠概率"] > base["妊娠概率"], weight > 0, column)   # moves with the coefficient
+        self.assertEqual(len(base["按训练集均值代替"]), len(INPUTS))                     # 7 inputs + "其余 27 项"
+        self.assertEqual(base["按训练集均值代替"][-1], f"其余 {len(FEATURE_NAMES) - len(INPUTS)} 项指标")
+
     def test_inputs_not_given_are_listed_as_at_the_mean(self):
         r = self.predictor.predict(age=33)
         self.assertEqual([e["输入"] for e in r["各输入的影响"]], ["女方年龄"])
         self.assertEqual(r["按训练集均值代替"][:2], ["女方AMH", "女方用药Gn总天数"])
-        self.assertEqual(r["按训练集均值代替"][-1], f"其余 {len(FEATURE_NAMES) - 3} 项指标")
+        self.assertEqual(r["按训练集均值代替"][-1], f"其余 {len(FEATURE_NAMES) - 8} 项指标")
 
     def test_other_indicators_and_missing_inputs_use_training_means(self):
         means = dict(zip(self.artifact["features"], self.artifact["means"]))
@@ -278,7 +293,8 @@ class PredictorTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 train_predictor.main(["--csv", str(source), "--out", str(out)])
         with self.assertRaises(ValueError):
-            Predictor(dict(self.artifact, inputs={"age": "女方年龄"}))
+            Predictor(dict(self.artifact, inputs={"age": "女方AMH"}))       # an input mapped to another column
+        Predictor(dict(self.artifact, inputs={"age": "女方年龄"}))                # older artifacts: fewer inputs load
 
     def test_excluding_a_case_retrains_without_its_fold(self):
         subset, scope = self.training.visible("0007")
@@ -403,7 +419,14 @@ class ApiTests(ServiceEnv):
             self.assertEqual((ok.status_code, set(ok.json())),
                              (200, {"妊娠概率", "95%置信区间", "各输入的影响", "按训练集均值代替", "影响说明"}))
             self.assertEqual(client.post("/ivf/predict_outcome", json={"amh": 2.0}).status_code, 200)
-            for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True}):
+            more = client.post("/ivf/predict_outcome", json={"age": 30, "pt": 11.8, "tt": 16, "wbc": 6.5,
+                                                             "sperm_survival": 67.8, "post_wash_im": 12})
+            self.assertEqual(more.status_code, 200)
+            self.assertEqual(len(more.json()["各输入的影响"]), 6)
+            from clinical_tools.predict import INPUTS
+            self.assertEqual(set(predict_server.PredictOutcomeRequest.model_fields), set(INPUTS))   # service = predictor
+            for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True},
+                        {"sperm_survival": 120}, {"pt": True}):
                 self.assertEqual(client.post("/ivf/predict_outcome", json=bad).status_code, 422, bad)
             self.assertEqual(client.get("/health").json()["tool"], "ivf_predict_outcome")
 
