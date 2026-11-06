@@ -85,12 +85,42 @@ class GraderTests(unittest.TestCase):
         self.assertEqual(early["format"]["score"], 0.5)                      # analysis must come first
 
     def test_tool_use_checks_the_case_values(self):
-        self.assertAlmostEqual(run_grade(GOOD, calls=CALLS[:2])[0]["tool_use"]["score"], 2 / 3, places=3)
+        full = run_grade(GOOD)[0]["tool_use"]
+        self.assertEqual((full["score"], full["metadata"]["coverage"]), (1.0, 1.0))
+        # no fixed sequence: one prediction call with every available input is enough
+        self.assertEqual(run_grade(GOOD, calls=[CALLS[2]])[0]["tool_use"]["score"], 1.0)
+        # a prediction without Gn days covers 2 of 3 available inputs
+        self.assertAlmostEqual(run_grade(GOOD, calls=CALLS[:2])[0]["tool_use"]["score"], (1 + 2 / 3) / 2, places=3)
+        # a wrong value makes that call wrong and does not count towards coverage
         wrong_age = [dict(c, arguments={**c["arguments"], "age": 40}) for c in CALLS]
-        self.assertEqual(run_grade(GOOD, calls=wrong_age)[0]["tool_use"]["score"], 0.0)
-        no_amh = run_grade(GOOD, calls=[CALLS[0], CALLS[2]], inputs={"age": 38.0, "amh": None, "gn_days": 10.0})
-        self.assertEqual(no_amh[0]["tool_use"]["score"], 1.0)               # similar tool not required without AMH
-        self.assertNotIn("similar_patients", no_amh[0]["tool_use"]["metadata"]["checks"])
+        item = run_grade(GOOD, calls=wrong_age)[0]["tool_use"]
+        self.assertAlmostEqual(item["score"], (0 + 2 / 3) / 2, places=3)
+        self.assertEqual(len(item["metadata"]["wrong_calls"]), 3)
+        self.assertEqual(run_grade(GOOD, calls=[])[0]["tool_use"]["score"], 0.0)
+
+    def test_tool_use_rejects_made_up_values_and_rewards_more_inputs(self):
+        inputs = {"age": 29.0, "amh": None, "gn_days": 10.0, "pt": 11.8, "tt": 16.0, "wbc": 6.53,
+                  "sperm_survival": 67.83, "post_wash_im": None}
+        call = lambda name, **args: {"tool_name": name, "arguments": args, "status": "ok", "response": {}}
+        made_up = run_grade(GOOD, calls=[call("ivf_similar_patients", age=29, amh=0)], inputs=inputs)[0]["tool_use"]
+        self.assertEqual(made_up["score"], 0.0)                              # AMH not in the case: invented
+        self.assertIn("amh=0（病例未提供）", made_up["metadata"]["wrong_calls"][0]["wrong"])
+        three = run_grade(GOOD, calls=[call("ivf_predict_outcome", age=29, gn_days=10)], inputs=inputs)[0]["tool_use"]
+        six = run_grade(GOOD, calls=[call("ivf_predict_outcome", age=29, gn_days=10, pt=11.8, tt=16, wbc=6.53,
+                                          sperm_survival=67.83)], inputs=inputs)[0]["tool_use"]
+        self.assertAlmostEqual(three["score"], (1 + 2 / 6) / 2, places=3)
+        self.assertEqual(six["score"], 1.0)
+        self.assertEqual(three["metadata"]["inputs_not_passed"], ["pt", "tt", "wbc", "sperm_survival"])
+        self.assertEqual(run_grade(GOOD, calls=[call("ivf_similar_patients", age=29)], inputs=inputs)[0]
+                         ["tool_use"]["score"], 0.5)                          # right values, but no prediction
+        db_only = run_grade(GOOD, calls=[call("ivf_case_sql", sql="SELECT 1")], inputs=inputs)[0]["tool_use"]
+        self.assertEqual(db_only["score"], 0.0)                              # database tools are not scored here
+        failed = [dict(call("ivf_predict_outcome", age=29, wbc=0), status="error")]
+        self.assertEqual(run_grade(GOOD, calls=failed, inputs=inputs)[0]["tool_use"]["score"], 0.0)
+
+    def test_grader_knows_the_prediction_inputs(self):
+        from clinical_tools.predict import INPUTS as PREDICT
+        self.assertEqual(grader.PREDICT_INPUTS, tuple(PREDICT))   # the grader runs without the services code
 
     def test_unsupported_numbers_lower_faithfulness(self):
         items, _ = run_grade(GOOD.replace("23 例", "30 例").replace("17.4%", "21.5%"))
@@ -162,6 +192,8 @@ class BuildSamplesTests(unittest.TestCase):
         case_id = sample["metadata"]["instance_id"].rsplit("-", 1)[1]
         meta = json.loads((out / "cases" / case_id / "metadata.json").read_text(encoding="utf-8"))
         self.assertIn(meta["label"], ("妊娠", "未妊娠"))
+        self.assertEqual(list(meta["inputs"]), ["age", "amh", "gn_days", "pt", "tt", "wbc", "sperm_survival",
+                                                "post_wash_im"])
         self.assertNotIn(case_id, sample["prompt"])
         self.assertEqual((out / "cases" / case_id / "service.env").read_text(encoding="utf-8"), "")
         after = {f["path"]: f["local_path"] for f in sample["metadata"]["after_agent_files"]}

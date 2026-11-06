@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO / "task" / "services"))
 
 from clinical_tools.cleaning import load_training, rows_to_training  # noqa: E402
 from clinical_tools.common import FEATURE_NAMES, assign_folds  # noqa: E402
+from clinical_tools.predict import INPUTS as PREDICT_INPUTS  # noqa: E402
 
 PUBLIC_TRAIN = REPO / "task" / "services" / "data" / "train_age_amh_gn.csv"
 TEMPLATE_BASE = "/eds-data/home/kuisu/03.projects/03.agent/Dressage/examples/data/dressage_claw_sample/tasks"
@@ -183,8 +184,9 @@ def main(argv: list[str] | None = None) -> None:
             metadata = {
                 "case_id": case_id, "split": args.split, "fold": fold,
                 "label": OUTCOME[int(cases.labels[i])],
-                "inputs": {"age": _number(values["女方年龄"]), "amh": _number(values["女方AMH"]),
-                           "gn_days": _number(values["女方用药Gn总天数"])},
+                # the case's values of the prediction tool's inputs (null = not in the case); the grader
+                # checks tool arguments against them
+                "inputs": {name: _number(values[column]) for name, column in PREDICT_INPUTS.items()},
             }
             case_dir = args.out / "cases" / case_id
             case_dir.mkdir(parents=True)

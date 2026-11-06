@@ -6,8 +6,10 @@ mount, copied in only after the agent has finished (label and the true tool inpu
 
 Items (weights sum to 1; no LLM judge, so rewards are fast and reproducible):
   outcome       0.70  1.0 when the conclusion matches the outcome, 0.0 when not, 0.5 for 不确定
-  tool_use      0.15  stage-1 prediction (age, AMH), stage-2 prediction (with Gn days) and one
-                      similar-patient query, each with the case's own values
+  tool_use      0.15  no fixed sequence of calls: half for every prediction / similar-patient call
+                      using only the case's own values (an indicator the case lacks must not be
+                      passed), half for how many of the case's available prediction inputs the
+                      fullest prediction call passed (see _tool_use)
   faithfulness  0.10  every percentage and case count in the answer comes from a tool result
                       (or the 39% overall rate given in the system prompt)
   format        0.05  【初诊】【促排】【胚胎】 in order, and the conclusion as the last line
@@ -103,22 +105,58 @@ def _close(a: Any, b: float | None) -> bool:
 
 
 # ---- items -----------------------------------------------------------------
+PREDICT_INPUTS = ("age", "amh", "gn_days", "pt", "tt", "wbc", "sperm_survival", "post_wash_im")
+CASE_TOOLS = {"ivf_predict_outcome": PREDICT_INPUTS, "ivf_similar_patients": ("age", "amh")}
+
+
+def _matches(value: Any, truth: float) -> bool:
+    try:
+        return abs(float(value) - truth) <= max(0.05, 0.001 * abs(truth))
+    except (TypeError, ValueError):
+        return False
+
+
 def _tool_use(calls: list[dict[str, Any]], inputs: dict[str, Any]) -> dict[str, Any]:
-    age, amh, gn = inputs.get("age"), inputs.get("amh"), inputs.get("gn_days")
-    ok = [c for c in calls if c.get("status") == "ok"]
-    predict = [c.get("arguments") or {} for c in ok if c.get("tool_name") == "ivf_predict_outcome"]
-    similar = [c.get("arguments") or {} for c in ok if c.get("tool_name") == "ivf_similar_patients"]
-    checks = {"stage1_predict_age_amh": any(_close(a.get("age"), age) and _close(a.get("amh"), amh)
-                                            and a.get("gn_days") is None for a in predict)}
-    if not (inputs and gn is None):                  # stage 2 needs the case's Gn days
-        checks["stage2_predict_with_gn"] = any(_close(a.get("age"), age) and a.get("gn_days") is not None
-                                               and _close(a.get("gn_days"), gn) for a in predict)
-    if not (inputs and amh is None):                 # the similar tool needs AMH
-        checks["similar_patients"] = any(_close(a.get("age"), age) and _close(a.get("amh"), amh) for a in similar)
-    passed = sum(checks.values())
-    return score_item("tool_use", round(passed / len(checks), 4), weight=WEIGHTS["tool_use"],
-                      reason=f"{passed}/{len(checks)} required tool calls with the case's values.",
-                      metadata={"checks": checks, "calls": len(calls)})
+    """The agent chooses which tools to call and how often; what is scored is that the calls use the
+    case's own values and that the prediction gets the inputs the case has.
+
+    correctness  share of prediction / similar-patient calls whose every case input (any of
+                 PREDICT_INPUTS that metadata.json lists) equals the case value; passing an input the
+                 case does not have (null in metadata.json) is a made-up value and makes the call wrong.
+    coverage     for the prediction call that passes the most of them: the share of the case's
+                 available inputs (listed and not null) passed with the right value; 0 without a
+                 prediction call.
+    score = (correctness + coverage) / 2; 0 without any prediction or similar-patient call. The
+    case-database tools take no case values and are neither required nor scored here.
+    """
+    case_calls = [c for c in calls if c.get("status") == "ok" and c.get("tool_name") in CASE_TOOLS]
+    available = [k for k in PREDICT_INPUTS if inputs.get(k) is not None]
+    if not case_calls:
+        return score_item("tool_use", 0.0, weight=WEIGHTS["tool_use"],
+                          reason="no prediction or similar-patient call.",
+                          metadata={"calls": len(calls), "available_inputs": available})
+    wrong_calls, best = [], {"call": None, "passed": []}
+    for n, call in enumerate(case_calls):
+        args = {k: v for k, v in (call.get("arguments") or {}).items() if v is not None}
+        bad = [f"{k}={args[k]}" + ("（病例未提供）" if inputs.get(k) is None else f"（病例 {inputs[k]:g}）")
+               for k in CASE_TOOLS[call["tool_name"]] if k in args and k in inputs
+               and (inputs[k] is None or not _matches(args[k], inputs[k]))]
+        if bad:
+            wrong_calls.append({"call": n, "tool": call["tool_name"], "wrong": bad})
+        if call["tool_name"] == "ivf_predict_outcome":
+            passed = [k for k in available if k in args and _matches(args[k], inputs[k])]
+            if best["call"] is None or len(passed) > len(best["passed"]):
+                best = {"call": n, "passed": passed}
+    correctness = 1 - len(wrong_calls) / len(case_calls)
+    coverage = len(best["passed"]) / len(available) if available and best["call"] is not None else 0.0
+    score = (correctness + coverage) / 2
+    missing = [k for k in available if k not in best["passed"]]
+    return score_item("tool_use", round(score, 4), weight=WEIGHTS["tool_use"],
+                      reason=f"{len(case_calls) - len(wrong_calls)}/{len(case_calls)} calls with the case's values; "
+                             f"prediction got {len(best['passed'])}/{len(available)} available inputs.",
+                      metadata={"calls": len(calls), "correctness": round(correctness, 4),
+                                "coverage": round(coverage, 4), "wrong_calls": wrong_calls,
+                                "available_inputs": available, "inputs_not_passed": missing})
 
 
 def _faithfulness(answer: str, calls: list[dict[str, Any]]) -> dict[str, Any]:
