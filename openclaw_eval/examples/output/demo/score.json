@@ -7,17 +7,17 @@
     "tool_calls": 3
   },
   "grader": {
-    "overall_score": 1.0,
-    "legacy_reward_score": 1.0,
-    "available_score": 1.0,
-    "official_score": 1.0,
+    "overall_score": 0.950005,
+    "legacy_reward_score": 0.950005,
+    "available_score": 0.950005,
+    "official_score": 0.950005,
     "evaluation_status": "fully_evaluated",
-    "outcome_status": "passed",
+    "outcome_status": "score_below_threshold",
     "scores": [
       {
         "name": "automated_checks",
         "type": "command",
-        "score": 1.0,
+        "score": 0.950005,
         "weight": 1.0
       }
     ],
@@ -48,17 +48,23 @@
         },
         {
           "name": "tool_use",
-          "score": 1.0,
+          "score": 0.6667,
           "weight": 0.15,
-          "status": "passed",
-          "reason": "3/3 required tool calls with the case's values.",
+          "status": "failed",
+          "reason": "3/3 calls succeeded with the case's values; prediction got 3/3 available inputs; case database not used.",
           "metadata": {
-            "checks": {
-              "stage1_predict_age_amh": true,
-              "stage2_predict_with_gn": true,
-              "similar_patients": true
-            },
-            "calls": 3
+            "calls": 3,
+            "correctness": 1.0,
+            "coverage": 1.0,
+            "database": 0.0,
+            "database_calls": 0,
+            "wrong_calls": [],
+            "available_inputs": [
+              "age",
+              "amh",
+              "gn_days"
+            ],
+            "inputs_not_passed": []
           }
         },
         {
@@ -85,9 +91,9 @@
       "aggregation": {
         "status": "fully_evaluated",
         "evaluation_status": "fully_evaluated",
-        "outcome_status": "passed",
+        "outcome_status": "score_below_threshold",
         "gate_failed": false,
-        "available_score": 1.0,
+        "available_score": 0.950005,
         "scored_weight": 1.0,
         "skipped_weight": 0,
         "total_declared_weight": 1.0,
@@ -117,17 +123,23 @@
           },
           {
             "name": "tool_use",
-            "score": 1.0,
+            "score": 0.6667,
             "weight": 0.15,
-            "status": "passed",
-            "reason": "3/3 required tool calls with the case's values.",
+            "status": "failed",
+            "reason": "3/3 calls succeeded with the case's values; prediction got 3/3 available inputs; case database not used.",
             "metadata": {
-              "checks": {
-                "stage1_predict_age_amh": true,
-                "stage2_predict_with_gn": true,
-                "similar_patients": true
-              },
-              "calls": 3
+              "calls": 3,
+              "correctness": 1.0,
+              "coverage": 1.0,
+              "database": 0.0,
+              "database_calls": 0,
+              "wrong_calls": [],
+              "available_inputs": [
+                "age",
+                "amh",
+                "gn_days"
+              ],
+              "inputs_not_passed": []
             }
           },
           {

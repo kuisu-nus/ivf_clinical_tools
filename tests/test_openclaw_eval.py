@@ -52,7 +52,8 @@ class OpenClawEvalTests(unittest.TestCase):
         expected = json.loads((OUTPUT / "grader_output.json").read_text(encoding="utf-8"))
         self.assertEqual(graded["overall_score"], expected["overall_score"])
         items = {i["name"]: i for i in graded["raw_scores"]["items"]}
-        self.assertEqual(items["tool_use"]["score"], 1.0)
+        self.assertEqual((items["tool_use"]["metadata"]["correctness"], items["tool_use"]["metadata"]["coverage"]), (1.0, 1.0))
+        self.assertEqual(items["tool_use"]["metadata"]["database"], 0.0)          # the example predates the case database
         self.assertEqual(items["outcome"]["metadata"]["predicted"], "未妊娠")
         trajectory = json.loads((res / "grader_mount" / "tool_trajectory.json").read_text(encoding="utf-8"))
         self.assertEqual(len(trajectory["calls"]), 3)

@@ -29,6 +29,8 @@ CALLS = [
                   "妊娠结局分布": {"临床妊娠": 4, "未妊娠": 19, "妊娠率": 0.174, "95%置信区间": [0.07, 0.371]}}},
     {"tool_name": "ivf_predict_outcome", "arguments": {"age": 38, "amh": 0.9, "gn_days": 10}, "status": "ok",
      "response": {"妊娠概率": 0.267, "95%置信区间": [0.217, 0.324]}},
+    {"tool_name": "ivf_case_sql", "arguments": {"sql": "SELECT AVG(pregnant) FROM cases WHERE age >= 38"},
+     "status": "ok", "response": {"columns": ["AVG(pregnant)"], "rows": [[0.157]]}},
 ]
 
 
@@ -86,17 +88,32 @@ class GraderTests(unittest.TestCase):
 
     def test_tool_use_checks_the_case_values(self):
         full = run_grade(GOOD)[0]["tool_use"]
-        self.assertEqual((full["score"], full["metadata"]["coverage"]), (1.0, 1.0))
-        # no fixed sequence: one prediction call with every available input is enough
-        self.assertEqual(run_grade(GOOD, calls=[CALLS[2]])[0]["tool_use"]["score"], 1.0)
+        self.assertEqual((full["score"], full["metadata"]["coverage"], full["metadata"]["database"]), (1.0, 1.0, 1.0))
+        # no fixed sequence: one full prediction call and one database query are enough
+        self.assertEqual(run_grade(GOOD, calls=[CALLS[2], CALLS[3]])[0]["tool_use"]["score"], 1.0)
         # a prediction without Gn days covers 2 of 3 available inputs
-        self.assertAlmostEqual(run_grade(GOOD, calls=CALLS[:2])[0]["tool_use"]["score"], (1 + 2 / 3) / 2, places=3)
+        self.assertAlmostEqual(run_grade(GOOD, calls=[CALLS[0], CALLS[3]])[0]["tool_use"]["score"],
+                               (1 + 2 / 3 + 1) / 3, places=3)
         # a wrong value makes that call wrong and does not count towards coverage
-        wrong_age = [dict(c, arguments={**c["arguments"], "age": 40}) for c in CALLS]
+        wrong_age = [dict(c, arguments={**c["arguments"], "age": 40}) if c["tool_name"] != "ivf_case_sql" else c
+                     for c in CALLS]
         item = run_grade(GOOD, calls=wrong_age)[0]["tool_use"]
-        self.assertAlmostEqual(item["score"], (0 + 2 / 3) / 2, places=3)
+        self.assertAlmostEqual(item["score"], (1 / 4 + 2 / 3 + 1) / 3, places=3)
         self.assertEqual(len(item["metadata"]["wrong_calls"]), 3)
         self.assertEqual(run_grade(GOOD, calls=[])[0]["tool_use"]["score"], 0.0)
+
+    def test_database_use_is_rewarded_once_and_failed_calls_cost(self):
+        no_db = run_grade(GOOD, calls=CALLS[:3])[0]["tool_use"]
+        self.assertAlmostEqual(no_db["score"], 2 / 3, places=3)
+        self.assertEqual(no_db["metadata"]["database"], 0.0)
+        many = run_grade(GOOD, calls=CALLS + [CALLS[3]] * 5)[0]["tool_use"]
+        self.assertEqual(many["score"], 1.0)                                  # calling it more earns nothing more
+        bad_sql = dict(CALLS[3], status="error", response={"error": "invalid_sql"})
+        item = run_grade(GOOD, calls=CALLS[:3] + [bad_sql])[0]["tool_use"]
+        self.assertAlmostEqual(item["score"], (3 / 4 + 1 + 0) / 3, places=3)   # failed, and no successful query
+        item = run_grade(GOOD, calls=CALLS + [bad_sql])[0]["tool_use"]
+        self.assertAlmostEqual(item["score"], (4 / 5 + 1 + 1) / 3, places=3)   # a failed query still costs
+        self.assertEqual(item["metadata"]["wrong_calls"][0]["wrong"], ["调用失败"])
 
     def test_tool_use_rejects_made_up_values_and_rewards_more_inputs(self):
         inputs = {"age": 29.0, "amh": None, "gn_days": 10.0, "pt": 11.8, "tt": 16.0, "wbc": 6.53,
@@ -108,13 +125,11 @@ class GraderTests(unittest.TestCase):
         three = run_grade(GOOD, calls=[call("ivf_predict_outcome", age=29, gn_days=10)], inputs=inputs)[0]["tool_use"]
         six = run_grade(GOOD, calls=[call("ivf_predict_outcome", age=29, gn_days=10, pt=11.8, tt=16, wbc=6.53,
                                           sperm_survival=67.83)], inputs=inputs)[0]["tool_use"]
-        self.assertAlmostEqual(three["score"], (1 + 2 / 6) / 2, places=3)
-        self.assertEqual(six["score"], 1.0)
+        self.assertAlmostEqual(three["score"], (1 + 2 / 6 + 0) / 3, places=3)
+        self.assertAlmostEqual(six["score"], 2 / 3, places=3)
         self.assertEqual(three["metadata"]["inputs_not_passed"], ["pt", "tt", "wbc", "sperm_survival"])
-        self.assertEqual(run_grade(GOOD, calls=[call("ivf_similar_patients", age=29)], inputs=inputs)[0]
-                         ["tool_use"]["score"], 0.5)                          # right values, but no prediction
         db_only = run_grade(GOOD, calls=[call("ivf_case_sql", sql="SELECT 1")], inputs=inputs)[0]["tool_use"]
-        self.assertEqual(db_only["score"], 0.0)                              # database tools are not scored here
+        self.assertAlmostEqual(db_only["score"], (1 + 0 + 1) / 3, places=3)
         failed = [dict(call("ivf_predict_outcome", age=29, wbc=0), status="error")]
         self.assertEqual(run_grade(GOOD, calls=failed, inputs=inputs)[0]["tool_use"]["score"], 0.0)
 
