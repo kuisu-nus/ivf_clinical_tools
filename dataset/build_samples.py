@@ -2,6 +2,7 @@
 
   python dataset/build_samples.py --cases xgb_test_283.csv --split test --out runs/test_samples
   python dataset/build_samples.py --cases train_clean.csv --split train --fold 0 --out runs/dev_fold0
+  python dataset/build_samples.py --cases train_clean.csv --split train --fold 1 2 3 4 --limit 64 --out runs/claw_train64
 
 For every case it writes <out>/cases/<case_id>/:
   prompt.md      the staged case text the agent sees (no case id, no outcome)
@@ -114,7 +115,7 @@ def _commands(service_env: dict[str, str]) -> dict:
             {"name": "map_workspace", "cmd": f'mkdir -p /workspace; {oc_ws}; if [ -n "$OC_WS" ] && [ -n "$(ls -A /workspace 2>/dev/null)" ]; then cp -r /workspace/* "$OC_WS/"; rm -f "$OC_WS/BOOTSTRAP.md"; fi; ls -la /workspace/', "required": True, "timeout": 15.0},
             {"name": "setup_task", "cmd": "bash /tmp/omni_task/scripts/setup.sh", "required": True, "timeout": 120.0},
             {"name": "start_services", "cmd": f"{env} bash /tmp/omni_task/scripts/start_services.sh".strip(), "required": True, "timeout": 90.0},
-            {"name": "register_mcp", "cmd": 'OC_HOME=$(ls -d "${BBS_RUNTIME_ROOT:-/workspace_sandbox/blackbox_server_runtime}"/bbs-*/home 2>/dev/null | head -1); HOME="$OC_HOME" openclaw mcp set claw-tools \'{"command":"python3","args":["/tmp/omni_task/runtime/claw_tools_mcp.py"],"env":{"OMNI_TOOL_SPECS_DIR":"/tmp/omni_task/tools","OMNI_TRACE_DIR":"/tmp/omni_task/trace","NO_PROXY":"127.0.0.1,localhost,0.0.0.0,::1","no_proxy":"127.0.0.1,localhost,0.0.0.0,::1"},"cwd":"/tmp/omni_task"}\'', "required": True, "timeout": 120.0},
+            {"name": "register_mcp", "cmd": "bash /tmp/omni_task/scripts/register_mcp.sh", "required": True, "timeout": 120.0},
             {"name": "expose_tool_instructions", "cmd": "OMNI_TOOL_SPECS_DIR=/tmp/omni_task/tools python3 /tmp/omni_task/runtime/claw_tools_mcp.py --append-agents-md", "required": True, "timeout": 15.0},
         ],
         "after_agent": [
@@ -130,7 +131,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cases", type=Path, required=True, help="case CSV (id, 35 indicators, label)")
     parser.add_argument("--split", choices=("test", "train"), required=True)
-    parser.add_argument("--fold", type=int, choices=range(5), help="train split only: keep cases of this fold")
+    parser.add_argument("--fold", type=int, nargs="+", choices=range(5),
+                        help="train split only: keep cases of these folds (e.g. --fold 1 2 3 4, leaving fold 0 for validation)")
     parser.add_argument("--limit", type=int, help="keep the first N cases (after the fold filter)")
     parser.add_argument("--out", type=Path, required=True, help="new output directory (holds labels; never commit)")
     parser.add_argument("--task-root", default=None,
@@ -158,7 +160,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.fold is not None:
             raise SystemExit("--fold applies to the train split only")
 
-    selected = [i for i, c in enumerate(cases.case_ids) if args.fold is None or folds.get(c) == args.fold]
+    selected = [i for i, c in enumerate(cases.case_ids) if args.fold is None or folds.get(c) in args.fold]
     # Hash order, not file order: in this dataset the id order alone separates the outcomes.
     selected.sort(key=lambda i: hashlib.sha256(f"sample:{cases.case_ids[i]}".encode()).hexdigest())
     if args.limit:

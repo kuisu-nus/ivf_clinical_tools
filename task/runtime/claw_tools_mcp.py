@@ -18,6 +18,7 @@ import sys
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -308,12 +309,26 @@ def call_tool(tools: dict[str, ToolSpec], name: str, arguments: dict[str, Any]) 
         body = {"error": f"unsupported backend type: {tool.backend.type}"}
         write_dispatch(tool, arguments, tool.backend.url, 500, body, 0.0)
         return tool_error_response(body)
-    status, body, latency_ms = dispatch_http(tool.backend, arguments)
-    write_dispatch(tool, arguments, tool.backend.url, status, body, latency_ms)
+    backend = tool.backend
+    url = resolve_url(backend.url)
+    if url != backend.url:
+        backend = ToolBackend(type=backend.type, url=url, method=backend.method, service=backend.service)
+    status, body, latency_ms = dispatch_http(backend, arguments)
+    write_dispatch(tool, arguments, backend.url, status, body, latency_ms)
     return {
         "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],
         "isError": status >= 400,
     }
+
+
+def resolve_url(url: str) -> str:
+    """Apply OMNI_TOOL_PORT_MAP ("9201:20004,9202:20005"): services moved to other ports, e.g. one
+    pair per sandbox when several sandboxes share a host network."""
+    mapping = dict(item.split(":", 1) for item in os.environ.get("OMNI_TOOL_PORT_MAP", "").split(",") if ":" in item)
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.port is None or str(parsed.port) not in mapping:
+        return url
+    return parsed._replace(netloc=f"{parsed.hostname}:{mapping[str(parsed.port)]}").geturl()
 
 
 def tool_error_response(body: dict[str, Any]) -> dict[str, Any]:

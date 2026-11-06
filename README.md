@@ -75,6 +75,7 @@ tasks/<task_id>/
 ├── dataset/                         # build_samples.py 生成样本；run_eval.sh 本地评估；eval_case.py、summarize_eval.py
 ├── openclaw_eval/                   # 在本机 OpenClaw 上按 before_agent → agent → after_agent 逐例运行并评分（见其 README）
 ├── ckpt_eval/                       # 训练 checkpoint 的转换、SGLang 部署、OpenClaw 配置和测试集评估对比（见其 README）
+├── rl/                              # 在 H20 上用 Dressage（Claw recipe + 本机 bubblewrap 沙箱）做 GRPO 训练（见其 README）
 ├── tests/                           # test_clinical_tools.py（工具与服务）、test_staged_task.py（奖励与样本）
 ├── mcp.example.json                 # Claude Code 的 MCP 配置示例
 └── requirements.txt
@@ -266,6 +267,8 @@ bash openclaw_eval/prepare.sh && bash openclaw_eval/run_all.sh runs/openclaw_dev
 python3 -m e2b_eval --samples runs/openclaw_dev/samples.jsonl --case 0974
 ```
 
+**RL 训练**：按 Dressage 的 Claw 实验流程，在单机 8 卡 H20 上用本机 bubblewrap 沙箱训练，步骤见 [rl/README.md](rl/README.md)。多个沙箱共用本机网络，所以工具服务按沙箱编号分配端口（`task/scripts/ports.sh`，`register_mcp.sh` 把端口告诉 MCP 工具桥）；E2B 中仍用 9201。
+
 注意：封存的 283 例测试集按项目约定只在最后用一次。调 prompt 时请用训练集的开发折（`--split train --fold k`），确定后再跑测试集。
 
 ### 测试
@@ -283,6 +286,7 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 - 预测：逻辑回归能恢复已知系数、AUC 与成对定义一致、模型文件只含汇总量、输出概率、置信区间和各输入的影响（方向与系数一致、缺省输入列入"按训练集均值代替"）、其余指标与缺失输入用训练均值、训练脚本不覆盖已有模型、删除训练数据后仍能预测。
 - 服务：Pydantic 校验（缺参数、类型、范围、未知参数、未知策略和指标、非法 JSON）返回 422；audit/reset/health；每个服务只提供自己的端点；请求和调用写入日志、日志文件按大小滚动；40 个并发请求压向一个慢速、上限很小的服务时，超出部分返回 429，工作线程不超过上限，服务保持可用。
 - OpenClaw 评估脚本（`tests/test_openclaw_eval.py`）：agent 阶段只保留回答（去掉进度行）、after_agent 对示例重新评分得到相同分数、工具说明写入指定的 AGENTS.md。
+- 沙箱端口（`tests/test_sandbox_ports.py`）：按沙箱编号分配端口、MCP 工具桥按映射改写地址、两个沙箱同时运行时各自只连到自己的服务、端口被旧服务占用时拒绝启动。
 - 仓库中的训练集：列与原数据一致、只有三项输入逐例不同、其余为均值；相似检索结果与文档中的数字一致（23 例、17.4%）。
 - 工具规格与 system prompt 与请求模型一致，4 个工具都在 9201、各自路径 `/tools/<工具名>`；MCP 桥接调用工具，参数错误时返回 isError；一个端口按工具名分别访问，未知工具名返回 404。
 

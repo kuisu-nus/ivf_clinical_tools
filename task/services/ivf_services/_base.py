@@ -124,6 +124,7 @@ class ServiceKit:
         self.status_counts: Counter[int] = Counter()
         self.health_info: dict[str, Any] = {}      # filled by the service once its data is loaded
         self.started = time.time()
+        self.instance = os.environ.get("IVF_SERVICE_INSTANCE", "")   # set by start_services.sh per start
         self._install(app)
 
     async def compute(self, func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
@@ -186,7 +187,7 @@ class ServiceKit:
                     "responses_by_status": {str(k): v for k, v in sorted(self.status_counts.items())},
                     "computations_in_flight": self.gate.pending,
                     "max_concurrency": self.gate.max_concurrency, "max_pending": self.gate.max_pending,
-                    **self.health_info}
+                    **({"instance": self.instance} if self.instance else {}), **self.health_info}
 
         @app.get("/ivf/audit")
         async def get_audit() -> dict[str, Any]:
