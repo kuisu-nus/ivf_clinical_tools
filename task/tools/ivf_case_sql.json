@@ -18,8 +18,8 @@
   },
   "backend": {
     "type": "http",
-    "service": "ivf_case_sql",
+    "service": "ivf_tools",
     "method": "POST",
-    "url": "http://127.0.0.1:9204/ivf/case_sql"
+    "url": "http://127.0.0.1:9201/tools/ivf_case_sql"
   }
 }

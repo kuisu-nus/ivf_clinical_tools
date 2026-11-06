@@ -1,14 +1,9 @@
-"""IVF similar-patient retrieval API (FastAPI on port 9201).
-
-  POST /ivf/similar_patients   similar training cases by female age and AMH (tool ivf_similar_patients)
-  GET  /health                 status, request counts and load
-  GET  /ivf/audit              tool calls since start;  POST /ivf/reset clears them
+"""Tool ivf_similar_patients: similar training cases by female age and AMH.
+Served by ivf_services/server.py at POST /tools/ivf_similar_patients.
 
 Environment:
-  IVF_TRAIN_CSV      required; the cleaned 1132-case training CSV (never the sealed test set)
-  IVF_SIMILAR_PORT   9201
+  IVF_TRAIN_CSV      the cleaned 1132-case training CSV (default: services/data/train_age_amh_gn.csv)
   IVF_EXCLUDE_CASE   training case under evaluation (agentic RL); its fold is hidden
-  Logging and concurrency: see ivf_services/_base.py.
 
 Extending: a new retrieval strategy is a class in clinical_tools/similar.py
 registered in STRATEGIES (it then appears in ``strategy`` below); more
@@ -17,26 +12,19 @@ indicators for the listed patients are requested through ``extra_fields``.
 
 from __future__ import annotations
 
-import asyncio
 import os
-import sys
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-
-from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from clinical_tools.cleaning import load_training
 from clinical_tools.common import FEATURE_NAMES
 from clinical_tools.similar import (AGE_WINDOW, DEFAULT_STRATEGY, LISTED_ALWAYS, MIN_COHORT, STRATEGIES, Query,
                                     SimilarCohort)
-from ivf_services._base import ServiceKit, run
 
-SERVICE, TOOL, ENDPOINT = "ivf_similar", "ivf_similar_patients", "/ivf/similar_patients"
-PORT_ENV, DEFAULT_PORT = "IVF_SIMILAR_PORT", 9201
+TOOL = "ivf_similar_patients"
+DEFAULT_TRAIN_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "train_age_amh_gn.csv"
 EXTRA_FIELDS = [f for f in FEATURE_NAMES if f not in LISTED_ALWAYS]
 TOOL_DESCRIPTION = (
     "按女方年龄和 AMH 在去泄露的 IVF-ET 训练病例中检索相似人群（默认策略：年龄 ±age_window 岁、AMH 同一档："
@@ -93,36 +81,21 @@ class SimilarPatientsRequest(BaseModel):
 
 REQUEST_MODEL = SimilarPatientsRequest
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    csv_path = os.environ.get("IVF_TRAIN_CSV")
-    try:
-        if not csv_path:
-            raise RuntimeError("IVF_TRAIN_CSV is required (the cleaned training CSV)")
-        training = await asyncio.to_thread(load_training, csv_path)
-        app.state.cohort = SimilarCohort(training, exclude_case=os.environ.get("IVF_EXCLUDE_CASE") or None)
-    except Exception:
-        kit.log.exception("failed to start: could not load training data from %s", csv_path)
-        raise
-    kit.health_info.update(scope=app.state.cohort.scope, cases=int(len(app.state.cohort.labels)),
-                           strategies=list(STRATEGIES))
-    kit.log.info("started: %s cases (%s) from %s", len(app.state.cohort.labels), app.state.cohort.scope, csv_path)
-    yield
-    kit.shutdown()
+STATE = "similar"
 
 
-app = FastAPI(title="IVF Similar Patients API", lifespan=lifespan)
-kit = ServiceKit(app, SERVICE, TOOL)
+def load() -> SimilarCohort:
+    csv_path = os.environ.get("IVF_TRAIN_CSV") or str(DEFAULT_TRAIN_CSV)
+    return SimilarCohort(load_training(csv_path), exclude_case=os.environ.get("IVF_EXCLUDE_CASE") or None)
 
 
-@app.post(ENDPOINT)
-async def similar_patients(req: SimilarPatientsRequest) -> dict[str, Any]:
-    resp = await kit.compute(app.state.cohort.query, Query(req.age, req.amh, req.age_window),
-                             strategy=req.strategy, extra_fields=req.extra_fields)
-    kit.record(ENDPOINT, req.model_dump(), resp,
-               summary=f"matched={resp['符合条件例数']} refused={resp['拒绝统计']}")
-    return resp
+def health(cohort: SimilarCohort) -> dict[str, Any]:
+    return {"scope": cohort.scope, "cases": int(len(cohort.labels)), "strategies": list(STRATEGIES)}
 
 
-if __name__ == "__main__":
-    run(app, PORT_ENV, DEFAULT_PORT)
+def call(cohort: SimilarCohort, req: SimilarPatientsRequest) -> dict[str, Any]:
+    return cohort.query(Query(req.age, req.amh, req.age_window), strategy=req.strategy, extra_fields=req.extra_fields)
+
+
+def summary(resp: dict[str, Any]) -> str:
+    return f"matched={resp['符合条件例数']} refused={resp['拒绝统计']}"

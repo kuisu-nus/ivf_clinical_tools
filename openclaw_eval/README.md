@@ -100,7 +100,7 @@ bash openclaw_eval/after_agent.sh  $C $R
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `IVF_SIMILAR_PORT` / `IVF_PREDICT_PORT` | 9301 / 9302 | 工具服务端口。改了之后要重新运行 `prepare.sh` |
+| `IVF_TOOLS_PORT` | 9301 | 工具服务端口（4 个工具同一端口）。改了之后要重新运行 `prepare.sh` |
 | `OC_WORKSPACE` | `~/.openclaw/workspace` | 使用哪个 OpenClaw 工作区的 AGENTS.md |
 | `OC_EVAL_WORK` | `outputs/openclaw` | 工具配置、调用记录、服务日志、备份的位置 |
 | `OC_LOCAL` | 0 | 设为 1 时用 `openclaw agent --local`（不经过 Gateway） |
@@ -109,6 +109,6 @@ bash openclaw_eval/after_agent.sh  $C $R
 
 ## 注意
 
-- **端口**：H20 的 9201/9202 上有一套别人启动的、用全部数据的服务。用它会让相似病例检索查到病例本身，所以这里默认用 9301/9302。`before_agent.sh` 会检查回答健康检查的确实是刚启动的服务、模型和数据范围符合本例设置，不符合就停下并说明原因。
+- **端口**：H20 的 9201 上可能有别人启动的、用全部数据的服务。用它会让工具查到病例本身，所以这里默认用 9301。`before_agent.sh` 会检查回答健康检查的确实是刚启动的服务、模型和数据范围符合本例设置，不符合就停下并说明原因。
 - **AGENTS.md**：`prepare.sh` 会覆盖工作区的 AGENTS.md，并把 BOOTSTRAP.md 移走（否则 OpenClaw 可能先进行首次见面的引导对话）；原文件在 `outputs/openclaw/backup/`，`restore.sh` 还原。
 - **数据**：病例目录和结果目录都含真实结局标签，放在 `runs/`、`outputs/` 下（已在 .gitignore 中），不要提交。

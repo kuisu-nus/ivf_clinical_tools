@@ -47,8 +47,8 @@
   },
   "backend": {
     "type": "http",
-    "service": "ivf_similar",
+    "service": "ivf_tools",
     "method": "POST",
-    "url": "http://127.0.0.1:9201/ivf/similar_patients"
+    "url": "http://127.0.0.1:9201/tools/ivf_similar_patients"
   }
 }

@@ -36,27 +36,28 @@ tasks/<task_id>/
 
 | 目标 | 状态 |
 |---|---|
-| 目标一：相似患者检索 `ivf_similar_patients` | 已完成：独立服务（端口 9201），URL 测试通过 |
-| 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：35 项指标训练、预测接收 8 项输入（年龄、AMH、Gn 天数和系数最大的 5 项），训练与预测分离，独立服务（端口 9202），URL 测试通过 |
-| 病例数据库 `ivf_query_cases`、`ivf_case_sql` | 1132 例训练病例（35 项指标和结局，无病例编号）供 agent 自行探索：结构化查询（端口 9203）和只读 SQL（端口 9204） |
+| 目标一：相似患者检索 `ivf_similar_patients` | 已完成，URL 测试通过 |
+| 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：35 项指标训练、预测接收 8 项输入（年龄、AMH、Gn 天数和系数最大的 5 项），训练与预测分离，URL 测试通过 |
+| 病例数据库 `ivf_query_cases`、`ivf_case_sql` | 1132 例训练病例（35 项指标和结局，无病例编号）供 agent 自行探索：结构化查询和只读 SQL |
 | 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code 自主调用两个服务并比较结果，调用轨迹写入 `dispatches.jsonl` |
-| 服务实现 | FastAPI + Pydantic；计算在固定大小的线程池中异步执行，并发有上限；日志写入文件并滚动；检索策略和返回字段可扩展 |
+| 服务实现 | 4 个工具在同一个进程、同一个端口（9201），按工具名访问 `POST /tools/<工具名>`；FastAPI + Pydantic；计算在固定大小的线程池中异步执行，并发有上限；日志写入文件并滚动；检索策略和返回字段可扩展 |
 
 ### 仓库结构（本仓库即一个任务目录）
 
 ```markdown
-├── task.json                        # 任务元数据、四个服务、grader 配置、文件映射
+├── task.json                        # 任务元数据、工具服务、grader 配置、文件映射
 ├── task/
 │   ├── prompt.md                    # 示例病例（三阶段格式）：虚构患者 38 岁、AMH 0.9、Gn 10 天
-│   ├── scripts/                     # start_services.sh 分别启动两个服务；stop_services.sh；setup.sh
-│   ├── tools/                       # ivf_similar_patients.json（→9201）、ivf_predict_outcome.json（→9202），由代码生成
+│   ├── scripts/                     # start_services.sh 启动工具服务（一个进程）；stop_services.sh；setup.sh
+│   ├── tools/                       # 4 个工具规格（→ 9201/tools/<工具名>），由代码生成
 │   ├── services/
-│   │   ├── ivf_services/            # HTTP 服务（FastAPI），结构同模板 mock_services/<name>/server.py
-│   │   │   ├── similar/server.py    #   服务一：相似患者（9201）：请求模型、接口、读训练数据
-│   │   │   ├── predict/server.py    #   服务二：妊娠预测（9202）：请求模型、接口、只读模型文件
-│   │   │   ├── cases/server.py      #   服务三：病例数据库结构化查询（9203）
-│   │   │   ├── case_sql/server.py   #   服务四：病例数据库只读 SQL（9204）
-│   │   │   ├── _base.py             #   两个服务共用：日志、有上限的计算线程池、audit/reset/health、错误处理
+│   │   ├── ivf_services/            # HTTP 服务（FastAPI）
+│   │   │   ├── server.py            #   一个进程、一个端口（9201），每个工具在 POST /tools/<工具名>
+│   │   │   ├── similar/tool.py      #   工具一：相似患者：请求模型、加载训练数据、调用
+│   │   │   ├── predict/tool.py      #   工具二：妊娠预测：请求模型、只读模型文件
+│   │   │   ├── cases/tool.py        #   工具三：病例数据库结构化查询
+│   │   │   ├── case_sql/tool.py     #   工具四：病例数据库只读 SQL（与工具三共用一个数据库）
+│   │   │   ├── _base.py             #   共用：日志、有上限的计算线程池、audit/reset/health、错误处理
 │   │   │   └── specs.py             #   由请求模型生成 task/tools 工具规格和 system prompt 的工具部分
 │   │   ├── clinical_tools/          # 计算逻辑，只依赖 numpy，不涉及 Web
 │   │   │   ├── common.py            #   公共定义
@@ -90,7 +91,7 @@ tasks/<task_id>/
   - 异常值：精液常规全为 0、男方血肌酐 <20（疑似尿素）、PRL>200、血细胞压积 >60、百分比超出 0–100，置为缺失；
   - 输出 `train_clean.csv` 和只含计数的 `cleaning_summary.json`；行数不是 1132 时拒绝运行。
 
-### 服务一：相似患者检索 `ivf_similar_patients`（端口 9201）
+### 工具一：相似患者检索 `ivf_similar_patients`
 
 - 输入：`age`（女方年龄，岁，18–55）；可选 `amh`（ng/mL，0–50；病例没有 AMH 时不传）、`age_window`（1–3，默认 1）、`strategy`（检索策略，默认 `age_amh_band`）、`extra_fields`（相似患者列表中额外返回的指标，中文指标名，最多 10 个，默认不返回）。参数名必须是英文：API 只接受字母、数字、`_ . -`，中文参数名会被 Claude Code 跳过。
 - 相似人群（策略 `age_amh_band`）：年龄 ±`age_window` 岁，且 AMH 同一档（<1.2 / 1.2–3.5 / >3.5 ng/mL，1.2 为 POSEIDON 界值）；没有 AMH 时只按年龄检索，筛选条件里注明"未提供 AMH，未按 AMH 分档"，避免 agent 为了调用工具自己填一个 AMH（例如 0）而被错归到低 AMH 档。
@@ -99,15 +100,15 @@ tasks/<task_id>/
 - 不返回病例编号，也不用编号排序（本数据集编号顺序本身对应结局）。
 - 为 agentic RL 预留 `IVF_EXCLUDE_CASE`：评估某训练病例时，检索看不到该病例所在的 1/5 数据。
 
-### 服务二：妊娠预测 `ivf_predict_outcome`（端口 9202）
+### 工具二：妊娠预测 `ivf_predict_outcome`
 
 **训练与预测分离：**
 
 ```bash
 # 训练（离线，一次）：训练数据 → 模型文件
 PYTHONPATH=task/services python -m clinical_tools.train_predictor --csv <训练集CSV> --out task/services/models/lr_35_indicators.json
-# 预测服务：只读模型文件，不需要训练数据
-IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_services/predict/server.py
+# 预测工具：只读模型文件，不需要训练数据
+IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_services/server.py
 ```
 
 - **训练**（与项目之前的 LR 相同）：全部 35 项指标，缺失用训练集均值填补，标准化，L2 正则逻辑回归（C=1，不做类别加权）；用 numpy 牛顿法拟合，与 sklearn `LogisticRegression(C=1)` 的系数一致（最大差 5×10⁻⁷）。
@@ -135,22 +136,22 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 - 注意：Gn 用药总天数在数据中只有 8–12 天五个取值，疑似被截断；年龄线性进入，对 37 岁以后妊娠率加速下降刻画不足。
 - agentic RL 时如需排除被评估病例，用 `train_predictor --exclude-case <ID>` 另训一个模型文件。
 
-### 服务三、四：病例数据库 `ivf_query_cases`（9203）、`ivf_case_sql`（9204）
+### 工具三、四：病例数据库 `ivf_query_cases`、`ivf_case_sql`
 
 让 agent 自己探索训练病例：哪些指标、在什么范围内和结局相关，当前患者所在人群是什么情况。数据是 `task/services/data/train_cases_35.csv`：1132 例训练病例按工具相同的规则清洗后的 35 项指标和结局（公开数据），由 `python -m clinical_tools.case_db --source <训练集CSV> --out task/services/data/train_cases_35.csv` 生成。
 
-- **防止结局泄露**：表里没有病例编号，行顺序按编号的哈希打乱（这个数据集里编号和行顺序本身就能分出结局）；283 例测试集不在表中。每行带一个 agent 看不到的 `fold` 列：设了 `IVF_EXCLUDE_CASE` 时（RL 训练），服务启动时按 `train_age_amh_gn.csv` 查出该病例的折并整折去掉，和相似患者工具、折外预测模型排除的是同一折。
+- **防止结局泄露**：表里没有病例编号，行顺序按编号的哈希打乱（这个数据集里编号和行顺序本身就能分出结局）；283 例测试集不在表中。每行带一个 agent 看不到的 `fold` 列：设了 `IVF_EXCLUDE_CASE` 时（RL 训练），启动时按 `train_age_amh_gn.csv` 查出该病例的折并整折去掉，和相似患者工具、折外预测模型排除的是同一折。
 - **`ivf_query_cases`**：`filters`（任意指标，`> >= < <= = between missing present`，同时满足）、`group_by`（按某指标分段统计妊娠率）、`describe`（指标分布及妊娠者 / 未妊娠者中位数）。少于 15 例不报告妊娠率。
 - **`ivf_case_sql`**：一条只读 SELECT（SQLite），表 `cases`（35 列英文列名 + `pregnant`）和 `fields`（列名与中文指标名对照）。数据库在内存中，只含可见病例；写入、ATTACH、PRAGMA 被拒绝，查询超过 2 秒中止，最多返回 200 行。
 
 ### 服务实现
 
-两个服务都是 FastAPI 应用，每个 `server.py` 的结构与模板 `mock_services/helpdesk/server.py` 相同：Pydantic 请求模型（参数、类型、范围、默认值一目了然）→ 接口函数 → 调用记录 → `uvicorn.run`。共用部分在 `_base.py`。
+所有工具由一个 FastAPI 应用 `ivf_services/server.py` 提供：一个进程、一个端口（`IVF_TOOLS_PORT`，默认 9201），每个工具在自己的路径 `POST /tools/<工具名>`，健康检查、调用记录、并发上限和日志共用。每个工具是一个模块（`similar/tool.py` 等），声明 Pydantic 请求模型、`load()`（加载数据或模型）、`call()`（计算）和 `health()`；新增工具只需写一个模块并加入 `server.TOOLS`。共用部分在 `_base.py`。
 
 - **参数校验（Pydantic）**：类型、范围、未知参数（`extra="forbid"`）、可选值都在请求模型里声明；不合法时返回 422 和可读的说明，例如 `参数校验失败：age: Input should be less than or equal to 55`，Agent 可以据此改正后重试。`task/tools/*.json` 由 `python -m ivf_services.specs` 从请求模型生成，参数只在一处定义。
 - **异步与并发上限**：接口是 `async` 的，检索、预测这类计算交给固定大小的线程池执行，不阻塞事件循环。同时计算的数量上限为 `IVF_MAX_CONCURRENCY`（默认 4），排队上限为 `IVF_MAX_PENDING`（默认 512，排队不占线程）；再多的请求立即返回 429（带 `Retry-After`）。连接数上限为 `IVF_MAX_CONNECTIONS`（默认 1024），超出返回 503。线程数不随请求数增长，不会出现请求一多就开出大量线程或进程的情况。
-- **日志**：设置 `IVF_LOG_DIR` 后，每个服务写 `<服务名>.log`，按大小滚动（`IVF_LOG_MAX_BYTES` 默认 10 MB，保留 `IVF_LOG_BACKUPS` 默认 5 份）；`start_services.sh` 默认写到 `$OMNI_TASK_DIR/logs/`。内容包括：启动时加载的数据或模型、每个请求一行（方法、路径、状态码、耗时）、每次工具调用一行（参数和结果摘要，不记录病例明细）、繁忙拒绝的警告、异常的完整报错（同时返回 500）、停止时按状态码统计的请求数。`IVF_LOG_LEVEL` 控制级别（DEBUG 时也记录 /health 探测）。
-- **状态查询**：`GET /health` 返回运行时长、各状态码的请求数、正在计算和排队的数量、加载的数据或模型；`GET /ivf/audit` 返回调用记录（内存中最多 `IVF_AUDIT_MAX` 条，默认 2000），`POST /ivf/reset` 清空。
+- **日志**：设置 `IVF_LOG_DIR` 后写 `ivf_tools.log`，按大小滚动（`IVF_LOG_MAX_BYTES` 默认 10 MB，保留 `IVF_LOG_BACKUPS` 默认 5 份）；`start_services.sh` 默认写到 `$OMNI_TASK_DIR/logs/`。内容包括：启动时加载的数据或模型、每个请求一行（方法、路径、状态码、耗时）、每次工具调用一行（参数和结果摘要，不记录病例明细）、繁忙拒绝的警告、异常的完整报错（同时返回 500）、停止时按状态码统计的请求数。`IVF_LOG_LEVEL` 控制级别（DEBUG 时也记录 /health 探测）。
+- **状态查询**：`GET /health` 返回工具列表、每个工具加载的数据或模型（`tool_info`：检索范围、病例数、模型文件）、运行时长、各状态码的请求数、正在计算和排队的数量；`GET /ivf/audit` 返回调用记录（内存中最多 `IVF_AUDIT_MAX` 条，默认 2000），`POST /ivf/reset` 清空。
 - **错误注入**：与模板相同，`ERROR_RATE>0` 时随机返回 429/500 或延迟，用于测试 Agent 的重试能力；默认关闭。
 
 **扩展方式**（不需要改服务）：
@@ -173,13 +174,15 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 pip install -r requirements.txt   # numpy、fastapi、pydantic、uvicorn
 # 1.（可选）想用完整数据时：清洗原始训练集，启动时用 IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv 指定
 PYTHONPATH=task/services python -m clinical_tools.cleaning --input xgb_train_1132.csv --out-dir outputs/clean_v1
-# 2. 一键启动两个服务（默认读取仓库中的训练集和模型文件；局域网访问加 IVF_TOOLS_HOST=0.0.0.0）
+# 2. 一键启动工具服务（4 个工具，一个进程，端口 9201；默认读取仓库中的数据和模型文件；局域网访问加 IVF_TOOLS_HOST=0.0.0.0）
 bash task/scripts/start_services.sh
 # 3. URL 测试
-curl -X POST http://127.0.0.1:9201/ivf/similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
-curl -X POST http://127.0.0.1:9202/ivf/predict_outcome -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9, "gn_days": 10}'
-# 每个服务另有：GET /health，GET /ivf/audit（调用记录），POST /ivf/reset；接口文档：http://127.0.0.1:9201/docs
-# 日志：/tmp/omni_task/logs/ivf_similar.log、ivf_predict.log（OMNI_TASK_DIR 或 IVF_LOG_DIR 可改）
+curl -X POST http://127.0.0.1:9201/tools/ivf_similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
+curl -X POST http://127.0.0.1:9201/tools/ivf_predict_outcome -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9, "gn_days": 10}'
+curl -X POST http://127.0.0.1:9201/tools/ivf_query_cases -H 'Content-Type: application/json' -d '{"filters": [{"field": "女方年龄", "op": ">=", "value": 38}]}'
+curl -X POST http://127.0.0.1:9201/tools/ivf_case_sql -H 'Content-Type: application/json' -d '{"sql": "SELECT pregnant, COUNT(*) FROM cases GROUP BY pregnant"}'
+# 另有：GET /health，GET /ivf/audit（调用记录），POST /ivf/reset；接口文档：http://127.0.0.1:9201/docs
+# 日志：/tmp/omni_task/logs/ivf_tools.log（OMNI_TASK_DIR 或 IVF_LOG_DIR 可改）
 # 4. 停止
 bash task/scripts/stop_services.sh
 ```
@@ -281,7 +284,7 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 - 服务：Pydantic 校验（缺参数、类型、范围、未知参数、未知策略和指标、非法 JSON）返回 422；audit/reset/health；每个服务只提供自己的端点；请求和调用写入日志、日志文件按大小滚动；40 个并发请求压向一个慢速、上限很小的服务时，超出部分返回 429，工作线程不超过上限，服务保持可用。
 - OpenClaw 评估脚本（`tests/test_openclaw_eval.py`）：agent 阶段只保留回答（去掉进度行）、after_agent 对示例重新评分得到相同分数、工具说明写入指定的 AGENTS.md。
 - 仓库中的训练集：列与原数据一致、只有三项输入逐例不同、其余为均值；相似检索结果与文档中的数字一致（23 例、17.4%）。
-- 工具规格与 system prompt 与请求模型一致、端口正确；MCP 桥接调用两个服务，参数错误时返回 isError。
+- 工具规格与 system prompt 与请求模型一致，4 个工具都在 9201、各自路径 `/tools/<工具名>`；MCP 桥接调用工具，参数错误时返回 isError；一个端口按工具名分别访问，未知工具名返回 404。
 
 ## Results
 

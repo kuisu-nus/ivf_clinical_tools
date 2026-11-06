@@ -16,8 +16,7 @@ from clinical_tools.case_db import COLUMNS, TABLE_HEADER, CaseDatabase, fold_of
 from clinical_tools.cleaning import load_training
 from clinical_tools.common import FEATURE_NAMES
 from ivf_services import specs
-from ivf_services.case_sql import server as sql_server
-from ivf_services.cases import server as cases_server
+from ivf_services import server as tools_server
 from test_clinical_tools import LiveServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,8 +105,8 @@ class ServiceTests(unittest.TestCase):
                 os.environ[k] = v
 
     def test_endpoints(self):
-        with TestClient(cases_server.app) as client:
-            ok = client.post("/ivf/query_cases", json={"filters": [{"field": "女方年龄", "op": "between",
+        with TestClient(tools_server.app) as client:
+            ok = client.post("/tools/ivf_query_cases", json={"filters": [{"field": "女方年龄", "op": "between",
                                                                      "value": 28, "value2": 30}]})
             self.assertEqual(ok.status_code, 200)
             self.assertFalse(ok.json()["妊娠结局分布"].get("拒绝统计", False))
@@ -115,29 +114,29 @@ class ServiceTests(unittest.TestCase):
                         {"filters": [{"field": "女方年龄", "op": ">"}]},
                         {"filters": [{"field": "女方年龄", "op": "between", "value": 30, "value2": 20}]},
                         {"group_by": {"field": "女方年龄", "cuts": []}}, {"sql": "SELECT 1"}):
-                self.assertEqual(client.post("/ivf/query_cases", json=bad).status_code, 422, bad)
-            self.assertEqual(client.get("/health").json()["cases"], 1132)
-        with TestClient(sql_server.app) as client:
-            self.assertEqual(client.post("/ivf/case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"],
+                self.assertEqual(client.post("/tools/ivf_query_cases", json=bad).status_code, 422, bad)
+            self.assertEqual(client.get("/health").json()["tool_info"]["ivf_query_cases"]["cases"], 1132)
+        with TestClient(tools_server.app) as client:
+            self.assertEqual(client.post("/tools/ivf_case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"],
                              [[1132]])
-            bad = client.post("/ivf/case_sql", json={"sql": "DELETE FROM cases"})
+            bad = client.post("/tools/ivf_case_sql", json={"sql": "DELETE FROM cases"})
             self.assertEqual((bad.status_code, bad.json()["error"]), (400, "invalid_sql"))
 
     def test_evaluated_case_fold_is_hidden(self):
         case = load_training(PUBLIC).case_ids[5]
         os.environ["IVF_EXCLUDE_CASE"] = case
-        with TestClient(cases_server.app) as client:
-            health = client.get("/health").json()
+        with TestClient(tools_server.app) as client:
+            health = client.get("/health").json()["tool_info"]["ivf_query_cases"]
         self.assertIn("排除", health["scope"])
         self.assertLess(health["cases"], 1132)
-        with TestClient(sql_server.app) as client:
-            n = client.post("/ivf/case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"][0][0]
+        with TestClient(tools_server.app) as client:
+            n = client.post("/tools/ivf_case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"][0][0]
         self.assertEqual(n, health["cases"])
 
     def test_mcp_bridge_calls_both_case_tools(self):
-        with LiveServer(cases_server.app) as cases, LiveServer(sql_server.app) as sql, \
+        with LiveServer(tools_server.app) as live, \
                 tempfile.TemporaryDirectory() as tmp:
-            specs.write_specs(Path(tmp) / "tools", {"ivf_query_cases": cases.url, "ivf_case_sql": sql.url})
+            specs.write_specs(Path(tmp) / "tools", {"ivf_query_cases": live.url, "ivf_case_sql": live.url})
             env = {**os.environ, "OMNI_TOOL_SPECS_DIR": str(Path(tmp) / "tools"), "OMNI_TRACE_DIR": str(Path(tmp) / "trace")}
             calls = [
                 {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ivf_query_cases", "arguments": {

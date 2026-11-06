@@ -7,7 +7,7 @@
 # Copies $OC_SOURCE_HOME/.openclaw to $OC_EVAL_ROOT/<name>/.openclaw, points it at the model on
 # 127.0.0.1:<model_port> (served name <name>, or MODEL_ID), puts the task's short workspace files in,
 # writes $OC_EVAL_ROOT/<name>/env.sh (HOME, ports, work dir) and runs openclaw_eval/prepare.sh in it:
-# system prompt + tool instructions in AGENTS.md, MCP server claw-tools on tool ports <tool_port>/<tool_port+1>.
+# system prompt + tool instructions in AGENTS.md, MCP server claw-tools, tool service on <tool_port>.
 # The original ~/.openclaw is not changed. FORCE=1 rebuilds an existing home.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
@@ -33,9 +33,8 @@ rm -f "$H/.openclaw/workspace/BOOTSTRAP.md"
 # HOME moves to the copy; PYTHONUSERBASE keeps the Python packages installed under the real home.
 cat > "$H/env.sh" <<ENV
 export HOME=$H PYTHONUSERBASE=$OC_SOURCE_HOME/.local OC_LOCAL=1 OC_EVAL_WORK=$H/work
-export IVF_SIMILAR_PORT=$TOOL_PORT IVF_PREDICT_PORT=$((TOOL_PORT + 1)) OMNI_TASK_DIR=$H/work/run
-export IVF_CASES_PORT=$((TOOL_PORT + 2)) IVF_CASE_SQL_PORT=$((TOOL_PORT + 3))
+export IVF_TOOLS_PORT=$TOOL_PORT OMNI_TASK_DIR=$H/work/run
 ENV
 (source "$H/env.sh" && "${OPENCLAW_BIN:-openclaw}" config validate >/dev/null && bash "$REPO/openclaw_eval/prepare.sh") 2>&1 | tail -n 2
-echo "ready: $H (model $OC_PROVIDER/$MODEL_ID on port $MODEL_PORT, tools on $TOOL_PORT–$((TOOL_PORT + 3)))"
+echo "ready: $H (model $OC_PROVIDER/$MODEL_ID on port $MODEL_PORT, tools on port $TOOL_PORT)"
 echo "try it: (source $H/env.sh && openclaw agent --local --session-id test --message '你好')"

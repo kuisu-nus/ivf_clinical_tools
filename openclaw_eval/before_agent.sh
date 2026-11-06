@@ -24,22 +24,21 @@ import json, os, sys, time, urllib.request
 env_file, out, started = sys.argv[1], sys.argv[2], int(sys.argv[3])
 settings = dict(line.split("=", 1) for line in open(env_file, encoding="utf-8").read().split() if "=" in line)
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-health = {}
-for name, port in (("similar", os.environ["IVF_SIMILAR_PORT"]), ("predict", os.environ["IVF_PREDICT_PORT"]),
-                   ("cases", os.environ["IVF_CASES_PORT"]), ("case_sql", os.environ["IVF_CASE_SQL_PORT"])):
-    with opener.open(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
-        health[name] = json.loads(resp.read())
-    if health[name]["uptime_seconds"] > time.time() - started + 5:
-        sys.exit(f"port {port} answers from a service started earlier (uptime {health[name]['uptime_seconds']} s); "
-                 "another service holds the port: set IVF_SIMILAR_PORT / IVF_PREDICT_PORT and rerun prepare.sh")
+port = os.environ["IVF_TOOLS_PORT"]
+with opener.open(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
+    service = json.loads(resp.read())
+if service["uptime_seconds"] > time.time() - started + 5:
+    sys.exit(f"port {port} answers from a service started earlier (uptime {service['uptime_seconds']} s); "
+             "another service holds the port: set IVF_TOOLS_PORT and rerun prepare.sh")
+health = service["tool_info"]
 model = settings.get("IVF_MODEL_NAME", "lr_35_indicators.json")
-if health["predict"]["model"] != model:
-    sys.exit(f"prediction service uses {health['predict']['model']}, expected {model}")
-for name in ("similar", "cases", "case_sql"):
+if health["ivf_predict_outcome"]["model"] != model:
+    sys.exit(f"prediction tool uses {health['ivf_predict_outcome']['model']}, expected {model}")
+for name in ("ivf_similar_patients", "ivf_query_cases", "ivf_case_sql"):
     if "IVF_EXCLUDE_CASE" in settings and "排除" not in health[name]["scope"]:
-        sys.exit(f"{name} service does not hold out the case: {health[name]['scope']}")
+        sys.exit(f"{name} does not hold out the case: {health[name]['scope']}")
 json.dump({"service_env": settings, "health": health}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-print(f"services ready: {health['similar']['scope']} ({health['similar']['cases']} cases), model {model}")
+print(f"services ready: {health['ivf_similar_patients']['scope']} ({health['ivf_similar_patients']['cases']} cases), model {model}")
 PY
 
 rm -f "$TRACE_DIR/dispatches.jsonl"        # this case's tool calls start from an empty trace

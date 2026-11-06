@@ -57,8 +57,8 @@
   },
   "backend": {
     "type": "http",
-    "service": "ivf_predict",
+    "service": "ivf_tools",
     "method": "POST",
-    "url": "http://127.0.0.1:9202/ivf/predict_outcome"
+    "url": "http://127.0.0.1:9201/tools/ivf_predict_outcome"
   }
 }

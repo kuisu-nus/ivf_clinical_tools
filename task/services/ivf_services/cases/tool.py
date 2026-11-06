@@ -1,37 +1,24 @@
-"""IVF training-case database, structured queries (FastAPI on port 9203).
-
-  POST /ivf/query_cases        filter training cases on any indicator, group, describe (tool ivf_query_cases)
-  GET  /health                 status, request counts and load
-  GET  /ivf/audit              tool calls since start;  POST /ivf/reset clears them
+"""Tool ivf_query_cases: structured queries on the training-case database (clinical_tools.case_db).
+Served by ivf_services/server.py at POST /tools/ivf_query_cases; shares the database with ivf_case_sql.
 
 Environment:
   IVF_CASE_TABLE     case table without IDs (default: services/data/train_cases_35.csv)
   IVF_EXCLUDE_CASE   training case under evaluation (agentic RL); its fold is hidden (IVF_TRAIN_CSV gives its fold)
   IVF_EXCLUDE_FOLD   alternatively the fold to hide
-  IVF_CASES_PORT     9203
-  Logging and concurrency: see ivf_services/_base.py.
 """
 
 from __future__ import annotations
 
-import asyncio
-import sys
-from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any, Literal
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-
-from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from clinical_tools.case_db import MIN_COHORT
 from clinical_tools.common import FEATURE_NAMES
-from ivf_services._base import ServiceKit, run
+from clinical_tools.case_db import CaseDatabase
 from ivf_services.case_db_loader import load_database
 
-SERVICE, TOOL, ENDPOINT = "ivf_cases", "ivf_query_cases", "/ivf/query_cases"
-PORT_ENV, DEFAULT_PORT = "IVF_CASES_PORT", 9203
+TOOL = "ivf_query_cases"
 TOOL_DESCRIPTION = (
     "查询去掉病例编号的 IVF-ET 训练病例库（35 项指标和临床妊娠结局）：按任意指标的条件筛选人群，"
     "可再按某个指标分段统计各段的妊娠率，并查看指标在人群中（以及妊娠者、未妊娠者中）的分布。"
@@ -79,30 +66,21 @@ class QueryCasesRequest(BaseModel):
 REQUEST_MODEL = QueryCasesRequest
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    try:
-        app.state.db, table = await asyncio.to_thread(load_database)
-    except Exception:
-        kit.log.exception("failed to start: could not load the case table")
-        raise
-    kit.health_info.update(scope=app.state.db.scope, cases=int(len(app.state.db.labels)))
-    kit.log.info("started: %s cases (%s) from %s", len(app.state.db.labels), app.state.db.scope, table)
-    yield
-    kit.shutdown()
+STATE = "case_db"          # shared with ivf_case_sql: loaded once
 
 
-app = FastAPI(title="IVF Case Database (queries)", lifespan=lifespan)
-kit = ServiceKit(app, SERVICE, TOOL)
+def load() -> CaseDatabase:
+    return load_database()[0]
 
 
-@app.post(ENDPOINT)
-async def query_cases(req: QueryCasesRequest) -> dict[str, Any]:
+def health(db: CaseDatabase) -> dict[str, Any]:
+    return {"scope": db.scope, "cases": int(len(db.labels))}
+
+
+def call(db: CaseDatabase, req: QueryCasesRequest) -> dict[str, Any]:
     body = req.model_dump()
-    resp = await kit.compute(app.state.db.query, body["filters"], body["group_by"], body["describe"])
-    kit.record(ENDPOINT, body, resp, summary=f"matched={resp['符合条件例数']}")
-    return resp
+    return db.query(body["filters"], body["group_by"], body["describe"])
 
 
-if __name__ == "__main__":
-    run(app, PORT_ENV, DEFAULT_PORT)
+def summary(resp: dict[str, Any]) -> str:
+    return f"matched={resp['符合条件例数']}"

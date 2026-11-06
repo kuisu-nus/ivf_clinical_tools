@@ -29,8 +29,8 @@ from clinical_tools.similar import (MIN_COHORT, STRATEGIES, AgeAmhBand, Query, S
                                     SimilarityStrategy, amh_band)
 from ivf_services import specs
 from ivf_services._base import ComputeGate, get_logger
-from ivf_services.predict import server as predict_server
-from ivf_services.similar import server as similar_server
+from ivf_services import server as tools_server
+from ivf_services.predict import tool as predict_tool
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK = ROOT / "task"
@@ -378,15 +378,15 @@ class ServiceEnv(unittest.TestCase):
 
 class ApiTests(ServiceEnv):
     def test_similar_endpoint_and_validation(self):
-        with TestClient(similar_server.app) as client:
+        with TestClient(tools_server.app) as client:
             client.post("/ivf/reset")
-            ok = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
+            ok = client.post("/tools/ivf_similar_patients", json={"age": 30, "amh": 2.0})
             self.assertEqual(ok.status_code, 200)
             self.assertFalse(ok.json()["拒绝统计"])
-            zero = client.post("/ivf/similar_patients", json={"age": 30, "amh": 0})     # 0 is not "missing"
+            zero = client.post("/tools/ivf_similar_patients", json={"age": 30, "amh": 0})     # 0 is not "missing"
             self.assertEqual(zero.status_code, 422)
             self.assertIn("不要用 0 代替", json.dumps(zero.json(), ensure_ascii=False))
-            age_only = client.post("/ivf/similar_patients", json={"age": 30})      # AMH optional
+            age_only = client.post("/tools/ivf_similar_patients", json={"age": 30})      # AMH optional
             self.assertEqual(age_only.status_code, 200)
             self.assertIn("未提供 AMH", age_only.json()["筛选条件"])
             self.assertGreaterEqual(age_only.json()["符合条件例数"], ok.json()["符合条件例数"])
@@ -394,57 +394,65 @@ class ApiTests(ServiceEnv):
                         {"age": 30, "amh": 1, "age_window": 1.5}, {"age": 30, "amh": True}, {"age": 30, "amh": 1, "id": "0001"},
                         {"age": 30, "amh": 1, "strategy": "nope"}, {"age": 30, "amh": 1, "extra_fields": ["label"]},
                         {"age": 30, "amh": 1, "extra_fields": ["女方年龄"]}):
-                response = client.post("/ivf/similar_patients", json=bad)
+                response = client.post("/tools/ivf_similar_patients", json=bad)
                 self.assertEqual(response.status_code, 422, bad)
                 self.assertTrue(response.json()["message"].startswith("参数校验失败"))
-            self.assertEqual(client.post("/ivf/similar_patients", content=b"{not json",
+            self.assertEqual(client.post("/tools/ivf_similar_patients", content=b"{not json",
                                          headers={"Content-Type": "application/json"}).status_code, 422)
             calls = client.get("/ivf/audit").json()["calls"]
             self.assertEqual([c["status"] for c in calls][:4], [200, 422, 200, 422])
             self.assertEqual(calls[0]["request_body"]["age"], 30)
             health = client.get("/health").json()
-            self.assertEqual((health["status"], health["tool"], health["cases"]), ("ok", "ivf_similar_patients", 400))
+            self.assertEqual((health["status"], health["tool_info"]["ivf_similar_patients"]["cases"]), ("ok", 400))
+            self.assertEqual(health["tools"], ["ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases", "ivf_case_sql"])
             self.assertEqual(client.post("/ivf/reset").json(), {"status": "reset"})
             self.assertEqual(client.get("/ivf/audit").json()["calls"], [])
 
     def test_a_registered_strategy_is_served_without_service_changes(self):
         STRATEGIES["age_only_test"] = AgeOnly()
         try:
-            with TestClient(similar_server.app) as client:
-                body = client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0, "strategy": "age_only_test"}).json()
+            with TestClient(tools_server.app) as client:
+                body = client.post("/tools/ivf_similar_patients", json={"age": 30, "amh": 2.0, "strategy": "age_only_test"}).json()
             self.assertEqual((body["检索策略"], body["筛选条件"]), ("age_only_test", "女方年龄 ±2 岁"))
         finally:
             del STRATEGIES["age_only_test"]
 
     def test_predict_endpoint_and_validation(self):
-        with TestClient(predict_server.app) as client:
-            ok = client.post("/ivf/predict_outcome", json={"age": 30, "amh": 2.0, "gn_days": 10})
+        with TestClient(tools_server.app) as client:
+            ok = client.post("/tools/ivf_predict_outcome", json={"age": 30, "amh": 2.0, "gn_days": 10})
             self.assertEqual((ok.status_code, set(ok.json())),
                              (200, {"妊娠概率", "95%置信区间", "各输入的影响", "按训练集均值代替", "影响说明"}))
-            self.assertEqual(client.post("/ivf/predict_outcome", json={"amh": 2.0}).status_code, 200)
-            more = client.post("/ivf/predict_outcome", json={"age": 30, "pt": 11.8, "tt": 16, "wbc": 6.5,
+            self.assertEqual(client.post("/tools/ivf_predict_outcome", json={"amh": 2.0}).status_code, 200)
+            more = client.post("/tools/ivf_predict_outcome", json={"age": 30, "pt": 11.8, "tt": 16, "wbc": 6.5,
                                                              "sperm_survival": 67.8, "post_wash_im": 12})
             self.assertEqual(more.status_code, 200)
             self.assertEqual(len(more.json()["各输入的影响"]), 6)
             from clinical_tools.predict import INPUTS
-            self.assertEqual(set(predict_server.PredictOutcomeRequest.model_fields), set(INPUTS))   # service = predictor
+            self.assertEqual(set(predict_tool.PredictOutcomeRequest.model_fields), set(INPUTS))   # service = predictor
             for bad in ({}, {"age": None}, {"age": 80}, {"gn_days": -1}, {"age": 30, "fsh": 8}, {"gn_days": True},
                         {"sperm_survival": 120}, {"pt": True}, {"age": 30, "amh": 0}, {"age": 30, "sperm_survival": 0},
                         {"age": 30, "post_wash_im": 0.0}, {"age": 30, "pt": 0}):
-                self.assertEqual(client.post("/ivf/predict_outcome", json=bad).status_code, 422, bad)
-            self.assertEqual(client.get("/health").json()["tool"], "ivf_predict_outcome")
+                self.assertEqual(client.post("/tools/ivf_predict_outcome", json=bad).status_code, 422, bad)
+            self.assertEqual(client.get("/health").json()["tool_info"]["ivf_predict_outcome"]["model"], "model.json")
 
-    def test_each_service_serves_only_its_own_tool(self):
-        with TestClient(similar_server.app) as similar, TestClient(predict_server.app) as predict:
-            self.assertEqual(similar.post("/ivf/predict_outcome", json={"age": 30}).status_code, 404)
-            self.assertEqual(predict.post("/ivf/similar_patients", json={"age": 30, "amh": 2}).status_code, 404)
+    def test_one_port_serves_every_tool_by_name(self):
+        with TestClient(tools_server.app) as client:
+            for tool, body in (("ivf_similar_patients", {"age": 30}), ("ivf_predict_outcome", {"age": 30}),
+                               ("ivf_query_cases", {}), ("ivf_case_sql", {"sql": "SELECT 1"})):
+                self.assertEqual(client.post(f"/tools/{tool}", json=body).status_code, 200, tool)
+            self.assertEqual(client.post("/tools/ivf_unknown", json={}).status_code, 404)
+            self.assertEqual(client.post("/tools/ivf_predict_outcome", json={"sql": "SELECT 1"}).status_code, 422)
+            calls = client.get("/ivf/audit").json()["calls"]
+            self.assertEqual([c["endpoint"] for c in calls[-5:-1]],
+                             ["/tools/ivf_similar_patients", "/tools/ivf_predict_outcome", "/tools/ivf_query_cases",
+                              "/tools/ivf_case_sql"])
 
     def test_requests_and_calls_are_logged(self):
-        with TestClient(similar_server.app) as client, self.assertLogs("ivf.ivf_similar", level="INFO") as logs:
-            client.post("/ivf/similar_patients", json={"age": 30, "amh": 2.0})
+        with TestClient(tools_server.app) as client, self.assertLogs("ivf.ivf_tools", level="INFO") as logs:
+            client.post("/tools/ivf_similar_patients", json={"age": 30, "amh": 2.0})
         text = "\n".join(logs.output)
-        self.assertRegex(text, r"POST /ivf/similar_patients -> 200 [\d.]+ms")
-        self.assertIn('call /ivf/similar_patients status=200 args={"age": 30.0, "amh": 2.0', text)
+        self.assertRegex(text, r"POST /tools/ivf_similar_patients -> 200 [\d.]+ms")
+        self.assertIn('call /tools/ivf_similar_patients status=200 args={"age": 30.0, "amh": 2.0', text)
         self.assertNotIn("未妊娠", text)        # results stay out of the log, only a summary
 
     def test_log_files_rotate_in_the_log_directory(self):
@@ -503,21 +511,24 @@ def post(url, body, timeout=30):
 
 class LiveServiceTests(ServiceEnv):
     def test_a_flood_of_requests_is_bounded_and_the_service_stays_up(self):
-        kit, state = similar_server.kit, similar_server.app.state
+        kit, state = tools_server.kit, tools_server.app.state
         original_gate = kit.gate
         kit.gate = ComputeGate("flood", max_concurrency=2, max_pending=3)
         release, worker_counts = threading.Event(), []
 
+        real_query = None
+
         def held_query(*args, **kwargs):          # admitted work waits until every refusal has come back
             worker_counts.append(sum(t.name.startswith("ivf-flood") for t in threading.enumerate()))
             release.wait(30)
-            return state.real_query(*args, **kwargs)
+            return real_query(*args, **kwargs)
 
         try:
-            with LiveServer(similar_server.app) as live:
-                state.real_query, state.cohort.query = state.cohort.query, held_query
+            with LiveServer(tools_server.app) as live:
+                cohort = state.tool_states["similar"]
+                real_query, cohort.query = cohort.query, held_query
                 with ThreadPoolExecutor(max_workers=40) as pool:
-                    futures = [pool.submit(post, live.url + "/ivf/similar_patients", {"age": 30, "amh": 2.0})
+                    futures = [pool.submit(post, live.url + "/tools/ivf_similar_patients", {"age": 30, "amh": 2.0})
                                for _ in range(40)]
                     deadline = time.time() + 30
                     while sum(f.done() for f in futures) < 35 and time.time() < deadline:
@@ -531,8 +542,8 @@ class LiveServiceTests(ServiceEnv):
                 self.assertTrue(all(b["error"] == "busy" for s, b in results if s == 429))
                 self.assertEqual((health["status"], health["computations_in_flight"]), ("ok", 5))
                 self.assertLessEqual(max(worker_counts), 2)        # never more worker threads than the cap
-                del state.cohort.query
-                self.assertEqual(post(live.url + "/ivf/similar_patients", {"age": 30, "amh": 2.0})[0], 200)
+                del cohort.query
+                self.assertEqual(post(live.url + "/tools/ivf_similar_patients", {"age": 30, "amh": 2.0})[0], 200)
         finally:
             release.set()
             kit.gate.shutdown()
@@ -542,17 +553,17 @@ class LiveServiceTests(ServiceEnv):
         saved = os.environ["IVF_TRAIN_CSV"]
         os.environ["IVF_TRAIN_CSV"] = str(Path(self.tmp.name) / "missing.csv")
         try:
-            with self.assertLogs("ivf.ivf_similar", level="ERROR") as logs, self.assertRaises(FileNotFoundError):
-                with TestClient(similar_server.app):
+            with self.assertLogs("ivf.ivf_tools", level="ERROR") as logs, self.assertRaises(FileNotFoundError):
+                with TestClient(tools_server.app):
                     pass
         finally:
             os.environ["IVF_TRAIN_CSV"] = saved
-        self.assertIn("failed to start: could not load training data", "\n".join(logs.output))
+        self.assertIn("failed to start: could not load the data of ivf_similar_patients", "\n".join(logs.output))
 
     def test_mcp_bridge_lists_and_calls_both_tools(self):
-        with LiveServer(similar_server.app) as similar, LiveServer(predict_server.app) as predict, \
+        with LiveServer(tools_server.app) as live, \
                 tempfile.TemporaryDirectory() as tmp:
-            specs.write_specs(Path(tmp) / "tools", {"ivf_similar_patients": similar.url, "ivf_predict_outcome": predict.url})
+            specs.write_specs(Path(tmp) / "tools", {t.TOOL: live.url for t in tools_server.TOOLS})
             env = {**os.environ, "OMNI_TOOL_SPECS_DIR": str(Path(tmp) / "tools"),
                    "OMNI_TRACE_DIR": str(Path(tmp) / "trace"), "OMNI_MCP_SERVER_NAME": "ivf-clinical"}
             messages = [
@@ -589,8 +600,9 @@ class SpecTests(unittest.TestCase):
             for key in committed["input_schema"]["properties"]:
                 self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")   # Claude Code drops tools with other names
         ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in specs.tool_specs()}
-        self.assertEqual(ports, {"ivf_similar_patients": "9201", "ivf_predict_outcome": "9202",
-                                 "ivf_query_cases": "9203", "ivf_case_sql": "9204"})
+        self.assertEqual(ports, dict.fromkeys(["ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases",
+                                               "ivf_case_sql"], "9201"))         # one port, one path per tool
+        self.assertTrue(all(s["backend"]["url"].endswith("/tools/" + s["name"]) for s in specs.tool_specs()))
         self.assertEqual((TASK / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8"),
                          specs.system_prompt_prefix())
 

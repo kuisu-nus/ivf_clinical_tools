@@ -4,7 +4,7 @@
 #
 #   bash openclaw_eval/prepare.sh
 #
-# 1. writes tool specs that point at our ports ($IVF_SIMILAR_PORT / $IVF_PREDICT_PORT)
+# 1. writes tool specs that point at our port ($IVF_TOOLS_PORT)
 # 2. registers the MCP server "claw-tools" (openclaw mcp set)
 # 3. backs up AGENTS.md (and moves BOOTSTRAP.md away), then writes the task system prompt,
 #    the no-questions policy and the tool instructions into AGENTS.md
@@ -22,10 +22,8 @@ PYTHONPATH="$REPO/task/services" "$PYTHON" - "$TOOLS_DIR" <<'PY'
 import os, sys
 from pathlib import Path
 from ivf_services.specs import write_specs
-urls = {"ivf_similar_patients": f"http://127.0.0.1:{os.environ['IVF_SIMILAR_PORT']}",
-        "ivf_predict_outcome": f"http://127.0.0.1:{os.environ['IVF_PREDICT_PORT']}",
-        "ivf_query_cases": f"http://127.0.0.1:{os.environ['IVF_CASES_PORT']}",
-        "ivf_case_sql": f"http://127.0.0.1:{os.environ['IVF_CASE_SQL_PORT']}"}
+base = f"http://127.0.0.1:{os.environ['IVF_TOOLS_PORT']}"
+urls = {name: base for name in ("ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases", "ivf_case_sql")}
 for path in write_specs(Path(sys.argv[1]), urls):
     print("  ", path)
 PY

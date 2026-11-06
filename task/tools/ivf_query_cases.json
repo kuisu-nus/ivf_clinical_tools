@@ -193,8 +193,8 @@
   },
   "backend": {
     "type": "http",
-    "service": "ivf_cases",
+    "service": "ivf_tools",
     "method": "POST",
-    "url": "http://127.0.0.1:9203/ivf/query_cases"
+    "url": "http://127.0.0.1:9201/tools/ivf_query_cases"
   }
 }

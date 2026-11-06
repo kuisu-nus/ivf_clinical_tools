@@ -122,7 +122,7 @@ class OcHomeTests(unittest.TestCase):
             self.assertIn("claw-tools__ivf_predict_outcome", (ws / "AGENTS.md").read_text(encoding="utf-8"))
             env_sh = (home / "env.sh").read_text()
             self.assertIn(f"HOME={home}", env_sh)
-            self.assertIn("IVF_SIMILAR_PORT=9321 IVF_PREDICT_PORT=9322", env_sh)
+            self.assertIn("IVF_TOOLS_PORT=9321", env_sh)
             self.assertIn(f"{home} mcp set claw-tools", (tmp / "log").read_text())     # registered in the copy
             self.assertEqual(json.loads((src / ".openclaw" / "openclaw.json").read_text()), OPENCLAW_CONFIG)
             self.assertTrue((src / ".openclaw" / "workspace" / "BOOTSTRAP.md").exists())

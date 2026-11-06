@@ -125,11 +125,10 @@ bash e2b_eval/run.sh --samples runs/openclaw_dev/samples.jsonl --case 0974
 
 ### 工具服务端口（可选）
 
-runner 在 before_agent 之后用 `curl` 检查两个工具服务的 `/health`，默认 9201/9202。如果样本里的 `start_services` 命令改了端口，也要在 runner 环境里设置：
+runner 在 before_agent 之后用 `curl` 检查工具服务的 `/health`（4 个工具同一端口），默认 9201。如果样本里的 `start_services` 命令改了端口，也要在 runner 环境里设置：
 
 ```bash
-export IVF_SIMILAR_PORT=9201
-export IVF_PREDICT_PORT=9202
+export IVF_TOOLS_PORT=9201
 ```
 
 ## 样本格式
@@ -199,7 +198,7 @@ export IVF_PREDICT_PORT=9202
    - `start_services`（两个 IVF 工具服务）
    - `register_mcp`（把 `/tmp/omni_task/runtime/claw_tools_mcp.py` 注册为 OpenClaw MCP server）
    - `expose_tool_instructions`（把工具说明追加到 workspace 的 `AGENTS.md`）
-6. 用 `curl` 检查 9201/9202 的 `/health`；不健康则不进入 agent。
+6. 用 `curl` 检查 9201 的 `/health`；不健康则不进入 agent。
 
 ### ② agent
 
@@ -297,13 +296,13 @@ python3 -m e2b_eval --samples runs/openclaw_dev/samples.jsonl --agent-mode mock 
 | `401 Authentication Fails ... Your api key ... is invalid` | `AGENT_LLM_API_KEY` 无效；最常见的是 `.env` 仍是模板占位符 `sk-...`。本次 0974 的完整变更与根因分析见 [CHANGES-AND-FAILURE-ANALYSIS.md](CHANGES-AND-FAILURE-ANALYSIS.md) |
 | `register -> HTTP 409 conflict` | 一个 BlackboxServer 只允许一个 binding。不要复用沙箱；本项目每例新建沙箱。若手工调试，重启沙箱 |
 | before_agent 某条命令失败 | 看 `before_agent.log`、`before_agent_commands.json`、`service_logs.txt` |
-| 工具健康检查失败 | 看 `service_logs.txt`；确认 `setup_task` 安装了 numpy/fastapi/pydantic/uvicorn，端口是 9201/9202 |
+| 工具健康检查失败 | 看 `service_logs.txt`；确认 `setup_task` 安装了 numpy/fastapi/pydantic/uvicorn，端口是 9201 |
 | `tool_calls` 为 0 | 看 `before_agent.log` 的 `register_mcp` / `expose_tool_instructions`，以及 `openclaw_logs.txt`。正常应有 MCP 热重载日志 |
 | `agent finished but returned no assistant text` | 看 `agent_response.json`、`history.json`、`openclaw_logs.txt`；可能是模型接口不可达或 OpenClaw 启动失败 |
 | `openclaw_logs.txt` 里有 `Invalid config ... agents.defaults` | OpenClaw adapter 在尝试权限配置的兼容模式；只要后面出现 `gateway ready` 就是正常的启动重试 |
 | 每条命令的 stderr 都有 `/bin/sh: ...: source: not found` | BlackboxServer 用 `/bin/sh -lc` 执行命令，模板 profile 里有 bash 专用的 `source`；不影响返回码和任务 |
 | 样本文件找不到 | 用 `--task-root` 或 `--path-map OLD=NEW`；先 `--dry-run` |
-| 想改工具端口 | 同时改样本 `start_services` 命令和 runner 的 `IVF_SIMILAR_PORT`/`IVF_PREDICT_PORT`，健康检查才一致 |
+| 想改工具端口 | 同时改样本 `start_services` 命令和 runner 的 `IVF_TOOLS_PORT`，健康检查才一致 |
 
 ## 限制
 

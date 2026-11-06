@@ -1,5 +1,5 @@
-# Start both IVF tool services in the background on Windows (PowerShell 5.1 or 7) and wait
-# until both answer /health. The Windows counterpart of start_services.sh.
+# Start the IVF tool service (all four tools, one process, one port) in the background on Windows
+# (PowerShell 5.1 or 7) and wait until it answers /health. The Windows counterpart of start_services.sh.
 #
 #   powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1
 #   powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1 -Lan     # reachable from the LAN
@@ -13,10 +13,7 @@ param(
     [string]$TrainCsv = $env:IVF_TRAIN_CSV,
     [string]$Model = $env:IVF_MODEL,
     [switch]$Lan,
-    [int]$SimilarPort = 9201,
-    [int]$PredictPort = 9202,
-    [int]$CasesPort = 9203,
-    [int]$CaseSqlPort = 9204
+    [int]$Port = 9201
 )
 # Errors are checked explicitly: with "Stop", Windows PowerShell 5.1 aborts on any stderr line of python.
 $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -47,7 +44,7 @@ $TrainCsv = (Resolve-Path $TrainCsv -ErrorAction Stop).Path
 $Model = (Resolve-Path $Model -ErrorAction Stop).Path
 
 New-Item -ItemType Directory -Force -Path $RunDir, $LogDir -ErrorAction Stop | Out-Null
-foreach ($name in @("ivf_similar", "ivf_predict", "ivf_cases", "ivf_case_sql")) {
+foreach ($name in @("ivf_tools")) {
     $pidFile = Join-Path $RunDir "service-$name.pid"
     if (Test-Path $pidFile) {
         $old = Get-Process -Id ([int](Get-Content $pidFile)) -ErrorAction SilentlyContinue
@@ -61,17 +58,14 @@ $env:PYTHONPATH = $Services
 $env:IVF_TRAIN_CSV = $TrainCsv
 $env:IVF_MODEL = $Model
 $env:IVF_LOG_DIR = $LogDir
-$env:IVF_SIMILAR_PORT = "$SimilarPort"
-$env:IVF_PREDICT_PORT = "$PredictPort"
-$env:IVF_CASES_PORT = "$CasesPort"
-$env:IVF_CASE_SQL_PORT = "$CaseSqlPort"
+$env:IVF_TOOLS_PORT = "$Port"
 $env:IVF_TOOLS_HOST = $(if ($Lan) { "0.0.0.0" } else { "127.0.0.1" })
 $env:PYTHONIOENCODING = "utf-8"
 
-function Start-IvfService([string]$Name, [string]$Folder) {
+function Start-IvfService([string]$Name) {
     $options = @{
         FilePath               = $Python
-        ArgumentList           = @("`"$(Join-Path $Services "ivf_services/$Folder/server.py")`"")
+        ArgumentList           = @("`"$(Join-Path $Services "ivf_services/server.py")`"")
         RedirectStandardOutput = (Join-Path $RunDir "service-$Name.out.log")
         RedirectStandardError  = (Join-Path $RunDir "service-$Name.err.log")
         PassThru               = $true
@@ -81,12 +75,9 @@ function Start-IvfService([string]$Name, [string]$Folder) {
     Set-Content -Path (Join-Path $RunDir "service-$Name.pid") -Value $process.Id
     Write-Host "started $Name (process $($process.Id))"
 }
-Start-IvfService "ivf_similar" "similar"
-Start-IvfService "ivf_predict" "predict"
-Start-IvfService "ivf_cases" "cases"
-Start-IvfService "ivf_case_sql" "case_sql"
+Start-IvfService "ivf_tools"
 
-# Wait for both /health endpoints (no proxy, so a system proxy or TUN cannot get in the way).
+# Wait for /health (no proxy, so a system proxy or TUN cannot get in the way).
 $check = @"
 import sys, time, urllib.request
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -104,9 +95,9 @@ for port in sys.argv[1:]:
                 sys.exit(1)
             time.sleep(0.5)
 "@
-& $Python -c $check $SimilarPort $PredictPort $CasesPort $CaseSqlPort
+& $Python -c $check $Port
 if ($LASTEXITCODE -ne 0) {
-    foreach ($name in @("ivf_similar", "ivf_predict", "ivf_cases", "ivf_case_sql")) {
+    foreach ($name in @("ivf_tools")) {
         Write-Host "--- last lines of $RunDir/service-$name.err.log ---" -ForegroundColor Yellow
         Get-Content (Join-Path $RunDir "service-$name.err.log") -Tail 8 -ErrorAction SilentlyContinue
     }
@@ -115,7 +106,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "Both services are running (logs: $LogDir; stop: stop_services.ps1)." -ForegroundColor Green
+Write-Host "The tool service is running (logs: $LogDir; stop: stop_services.ps1)." -ForegroundColor Green
 $hosts = @("127.0.0.1")
 if ($Lan -and $OnWindows) {
     $hosts += Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -123,6 +114,5 @@ if ($Lan -and $OnWindows) {
         ForEach-Object { $_.IPAddress }
 }
 foreach ($h in $hosts) {
-    Write-Host "  similar patients: http://${h}:$SimilarPort/docs"
-    Write-Host "  pregnancy predict: http://${h}:$PredictPort/docs"
+    Write-Host "  tools (POST /tools/<tool name>): http://${h}:$Port/docs"
 }

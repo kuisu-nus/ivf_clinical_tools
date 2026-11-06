@@ -655,19 +655,10 @@ async def _run_commands(
 async def _probe_tools(client: BlackboxClient, session_id: str) -> dict[str, Any]:
     """Confirm both tool services answer from the sandbox after start_services."""
     # Read the ports at call time so an --env-file is honoured.
-    similar_port = os.environ.get("IVF_SIMILAR_PORT", "9201")
-    predict_port = os.environ.get("IVF_PREDICT_PORT", "9202")
-    cases_port = os.environ.get("IVF_CASES_PORT", "9203")
-    sql_port = os.environ.get("IVF_CASE_SQL_PORT", "9204")
+    tools_port = os.environ.get("IVF_TOOLS_PORT", "9201")
     cmd = (
-        f"echo '== ivf_similar'; curl -sf --noproxy '*' --max-time 10 "
-        f"http://127.0.0.1:{similar_port}/health; "
-        f"echo; echo '== ivf_predict'; curl -sf --noproxy '*' --max-time 10 "
-        f"http://127.0.0.1:{predict_port}/health; "
-        f"echo; echo '== ivf_cases'; curl -sf --noproxy '*' --max-time 10 "
-        f"http://127.0.0.1:{cases_port}/health; "
-        f"echo; echo '== ivf_case_sql'; curl -sf --noproxy '*' --max-time 10 "
-        f"http://127.0.0.1:{sql_port}/health; echo"
+        f"echo '== ivf_tools'; curl -sf --noproxy '*' --max-time 10 "
+        f"http://127.0.0.1:{tools_port}/health; echo"
     )
     started = time.monotonic()
     try:

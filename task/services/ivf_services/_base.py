@@ -1,7 +1,6 @@
-"""Shared plumbing for the IVF tool services (FastAPI), so each server.py only
-declares its request model, its tool endpoint and how it loads its data.
+"""Shared plumbing for the IVF tool service (FastAPI; ivf_services/server.py serves every tool).
 
-``ServiceKit(app, service, tool)`` adds to an app:
+``ServiceKit(app, service, tools)`` adds to an app:
 
 * GET /health (status, uptime, request counts, load), GET /ivf/audit (tool calls
   since start or the last reset) and POST /ivf/reset, as in the template services;
@@ -117,8 +116,8 @@ class ComputeGate:
 
 
 class ServiceKit:
-    def __init__(self, app: FastAPI, service: str, tool: str):
-        self.service, self.tool = service, tool
+    def __init__(self, app: FastAPI, service: str, tools: list[str]):
+        self.service, self.tools = service, list(tools)
         self.log = get_logger(service)
         self.gate = ComputeGate(service, _env_int("IVF_MAX_CONCURRENCY", 4), _env_int("IVF_MAX_PENDING", 512))
         self.audit: deque[dict[str, Any]] = deque(maxlen=_env_int("IVF_AUDIT_MAX", 2000))
@@ -182,7 +181,7 @@ class ServiceKit:
 
         @app.get("/health")
         async def health() -> dict[str, Any]:
-            return {"status": "ok", "service": self.service, "tool": self.tool,
+            return {"status": "ok", "service": self.service, "tools": self.tools,
                     "uptime_seconds": round(time.time() - self.started, 1),
                     "responses_by_status": {str(k): v for k, v in sorted(self.status_counts.items())},
                     "computations_in_flight": self.gate.pending,
