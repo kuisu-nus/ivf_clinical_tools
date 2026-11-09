@@ -79,7 +79,7 @@ L=~/Dressage/log/traj_payload/ivf-smoke
 grep -rhoE 'overall_score[^0-9]{1,6}[0-9.]+' $L | grep -oE '[0-9.]+$' | sort | uniq -c   # 每条轨迹都有分数，且不全是 0
 grep -rho 'registered claw-tools[^"]*' $L | sort -u | head      # 每个沙箱用自己的端口（20000 + 沙箱编号）
 grep -rhoE 'cases[^0-9]{1,6}9(05|06|07)|lr_35_indicators_fold[0-4]' $L | sort | uniq -c   # 工具排除了病例所在的折（905–907 例、fold 模型）
-ls ~/Dressage/log/traj_err/ivf-smoke                            # 失败的轨迹及原因
+ls ~/Dressage/log/traj_err/ivf-smoke                            # 失败的轨迹及原因（见下方“排错”）
 ```
 
 ## 5. 正式训练
@@ -101,4 +101,29 @@ nohup bash rl/run_ivf_claw_h20.sh > runs/ivf-claw-v1.log 2>&1 &
 
 ## 端口说明
 
-bubblewrap 沙箱共用本机网络。如果每个沙箱都用 9201，后启动的沙箱会连到先启动的沙箱的服务，拿到排除了另一个病例的数据。所以 `task/scripts/ports.sh` 按沙箱编号（`DRESSAGE_BLACKBOX_SLOT_ID`）分配端口：20000 + 编号（4 个工具都在这一个端口上）。`register_mcp.sh` 通过 `OMNI_TOOL_PORT_MAP` 告诉 MCP 工具桥实际端口。`start_services.sh` 还会检查回应健康检查的确实是刚启动的服务。在 E2B 中没有沙箱编号，仍用 9201。
+bubblewrap 沙箱共用本机网络。如果每个沙箱都用 9201，后启动的沙箱会连到先启动的沙箱的服务，拿到排除了另一个病例的数据。所以 `task/scripts/ports.sh` 按沙箱编号（`DRESSAGE_BLACKBOX_SLOT_ID`）分配端口：20000 + 编号（4 个工具都在这一个端口上）。`register_mcp.sh` 通过 `OMNI_TOOL_PORT_MAP` 告诉 MCP 工具桥实际端口。`start_services.sh` 还会检查回应健康检查的确实是刚启动的服务。只有数字编号（本机 bubblewrap）才换端口；E2B 中每个沙箱有自己的网络，Dressage 把编号设为 `e2b`，仍用 9201。
+
+## 排错：before_agent 命令失败
+
+Dressage 抛出的 `required execute_cmd failed: name=<命令> returncode=1` 只有命令名和退出码。命令的 stdout/stderr 在失败轨迹的 `error.json` 里：`$LOG_DIR/traj_err/<RUN_NAME>/<instance_id>/<session_id>/`，字段 `execute_cmds[]` → `cmd_result.stderr`（`LOG_DIR` 默认为运行训练的那份 Dressage 仓库下的 `log/`，例如 `/root/Dressage/log`）。成功轨迹的同一字段在 `traj_payload/` 下。按命令和报错统计失败原因：
+
+```bash
+python3 - ~/Dressage/log/traj_err/<RUN_NAME> <<'PY'
+import collections, json, pathlib, sys
+reasons = collections.Counter()
+for f in pathlib.Path(sys.argv[1]).rglob("error.json"):
+    stack = [json.loads(f.read_text())]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            result = x.get("cmd_result")
+            if isinstance(result, dict) and result.get("returncode") not in (0, None):
+                reasons[(x.get("name"), (result.get("stderr") or "").strip()[-300:])] += 1
+            stack.extend(x.values())
+        elif isinstance(x, list):
+            stack.extend(x)
+for (name, err), n in reasons.most_common():
+    print(f"{n} x {name}\n  {err}")
+PY
+```
+`start_services` 失败时，脚本会把工具服务日志的最后 40 行写进 stderr。
