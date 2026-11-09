@@ -404,7 +404,7 @@ class ApiTests(ServiceEnv):
             self.assertEqual(calls[0]["request_body"]["age"], 30)
             health = client.get("/health").json()
             self.assertEqual((health["status"], health["tool_info"]["ivf_similar_patients"]["cases"]), ("ok", 400))
-            self.assertEqual(health["tools"], ["ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases", "ivf_case_sql"])
+            self.assertEqual(health["tools"], ["ivf_similar_patients", "ivf_predict_outcome", "ivf_case_sql"])
             self.assertEqual(client.post("/ivf/reset").json(), {"status": "reset"})
             self.assertEqual(client.get("/ivf/audit").json()["calls"], [])
 
@@ -438,14 +438,13 @@ class ApiTests(ServiceEnv):
     def test_one_port_serves_every_tool_by_name(self):
         with TestClient(tools_server.app) as client:
             for tool, body in (("ivf_similar_patients", {"age": 30}), ("ivf_predict_outcome", {"age": 30}),
-                               ("ivf_query_cases", {}), ("ivf_case_sql", {"sql": "SELECT 1"})):
+                               ("ivf_case_sql", {"sql": "SELECT 1"})):
                 self.assertEqual(client.post(f"/tools/{tool}", json=body).status_code, 200, tool)
             self.assertEqual(client.post("/tools/ivf_unknown", json={}).status_code, 404)
             self.assertEqual(client.post("/tools/ivf_predict_outcome", json={"sql": "SELECT 1"}).status_code, 422)
             calls = client.get("/ivf/audit").json()["calls"]
-            self.assertEqual([c["endpoint"] for c in calls[-5:-1]],
-                             ["/tools/ivf_similar_patients", "/tools/ivf_predict_outcome", "/tools/ivf_query_cases",
-                              "/tools/ivf_case_sql"])
+            self.assertEqual([c["endpoint"] for c in calls[-4:-1]],
+                             ["/tools/ivf_similar_patients", "/tools/ivf_predict_outcome", "/tools/ivf_case_sql"])
 
     def test_requests_and_calls_are_logged(self):
         with TestClient(tools_server.app) as client, self.assertLogs("ivf.ivf_tools", level="INFO") as logs:
@@ -582,7 +581,7 @@ class LiveServiceTests(ServiceEnv):
                                  encoding="utf-8")   # the bridge speaks UTF-8; Windows defaults to GBK
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
             self.assertEqual([t["name"] for t in replies[2]["result"]["tools"]],
-                             ["ivf_case_sql", "ivf_predict_outcome", "ivf_query_cases", "ivf_similar_patients"])
+                             ["ivf_case_sql", "ivf_predict_outcome", "ivf_similar_patients"])
             self.assertTrue(json.loads(replies[3]["result"]["content"][0]["text"])["拒绝统计"])
             self.assertIn("妊娠概率", json.loads(replies[4]["result"]["content"][0]["text"]))
             self.assertTrue(replies[5]["result"]["isError"])
@@ -600,8 +599,7 @@ class SpecTests(unittest.TestCase):
             for key in committed["input_schema"]["properties"]:
                 self.assertRegex(key, r"^[a-zA-Z0-9_.-]{1,64}$")   # Claude Code drops tools with other names
         ports = {s["name"]: s["backend"]["url"].split(":")[2].split("/")[0] for s in specs.tool_specs()}
-        self.assertEqual(ports, dict.fromkeys(["ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases",
-                                               "ivf_case_sql"], "9201"))         # one port, one path per tool
+        self.assertEqual(ports, dict.fromkeys(["ivf_similar_patients", "ivf_predict_outcome", "ivf_case_sql"], "9201"))         # one port, one path per tool
         self.assertTrue(all(s["backend"]["url"].endswith("/tools/" + s["name"]) for s in specs.tool_specs()))
         self.assertEqual((TASK / "runtime" / "system_prompt_prefix.txt").read_text(encoding="utf-8"),
                          specs.system_prompt_prefix())

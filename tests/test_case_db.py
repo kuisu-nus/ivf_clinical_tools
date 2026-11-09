@@ -1,4 +1,4 @@
-"""Case database tools: the ID-free table, hiding the evaluated case's fold, queries, read-only SQL."""
+"""Case database tool: the ID-free table, hiding the evaluated case's fold, read-only SQL."""
 
 import csv
 import json
@@ -50,31 +50,25 @@ class TableTests(unittest.TestCase):
         visible, _ = public.visible(case)
         db = CaseDatabase(TABLE, exclude_fold=fold_of(case, PUBLIC))
         self.assertEqual(len(db.labels), len(visible.case_ids))
-        self.assertEqual(int(db.labels.sum()), int(visible.labels.sum()))
+        self.assertEqual(sum(db.labels), int(visible.labels.sum()))
         self.assertIn("排除", db.scope)
         with self.assertRaises(ValueError):
             fold_of("T0001", PUBLIC)
 
 
-class QueryTests(unittest.TestCase):
+class SqlTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.db = CaseDatabase(TABLE)
 
-    def test_filters_groups_and_distributions(self):
-        r = self.db.query([{"field": "女方年龄", "op": ">=", "value": 38}],
-                          {"field": "女方AMH", "cuts": [1.2]}, ["女方AMH"])
-        age = self.db.column("女方年龄")
-        self.assertEqual(r["符合条件例数"], int((age >= 38).sum()))
-        self.assertEqual(r["妊娠结局分布"]["临床妊娠"], int(self.db.labels[age >= 38].sum()))
-        self.assertEqual(sum(g["例数"] for g in r["分组统计"]), r["符合条件例数"])   # bands + missing cover all
-        self.assertIn("中位数", r["指标分布"]["女方AMH"])
-
-    def test_small_groups_are_refused(self):
-        r = self.db.query([{"field": "女方年龄", "op": ">", "value": 45}])
-        self.assertTrue(r["妊娠结局分布"]["拒绝统计"])
-        missing = self.db.query([{"field": "女方AMH", "op": "missing"}])
-        self.assertEqual(missing["符合条件例数"], int(np.isnan(self.db.column("女方AMH")).sum()))
+    def test_table_content_matches_the_csv(self):
+        with open(TABLE, encoding="utf-8", newline="") as handle:
+            body = list(csv.reader(handle))[1:]
+        age = [float(r[1 + FEATURE_NAMES.index("女方年龄")]) for r in body]
+        missing_amh = sum(1 for r in body if not r[1 + FEATURE_NAMES.index("女方AMH")])
+        self.assertEqual(self.db.sql("SELECT COUNT(*), SUM(pregnant) FROM cases WHERE age >= 38")["rows"],
+                         [[sum(a >= 38 for a in age), sum(int(r[-1]) for r, a in zip(body, age) if a >= 38)]])
+        self.assertEqual(self.db.sql("SELECT COUNT(*) FROM cases WHERE amh IS NULL")["rows"], [[missing_amh]])
 
     def test_sql_is_read_only_and_bounded(self):
         r = self.db.sql("SELECT pregnant, COUNT(*) FROM cases GROUP BY pregnant ORDER BY pregnant")
@@ -104,57 +98,46 @@ class ServiceTests(unittest.TestCase):
             else:
                 os.environ[k] = v
 
-    def test_endpoints(self):
-        with TestClient(tools_server.app) as client:
-            ok = client.post("/tools/ivf_query_cases", json={"filters": [{"field": "女方年龄", "op": "between",
-                                                                     "value": 28, "value2": 30}]})
-            self.assertEqual(ok.status_code, 200)
-            self.assertFalse(ok.json()["妊娠结局分布"].get("拒绝统计", False))
-            for bad in ({"filters": [{"field": "id", "op": ">", "value": 1}]},
-                        {"filters": [{"field": "女方年龄", "op": ">"}]},
-                        {"filters": [{"field": "女方年龄", "op": "between", "value": 30, "value2": 20}]},
-                        {"group_by": {"field": "女方年龄", "cuts": []}}, {"sql": "SELECT 1"}):
-                self.assertEqual(client.post("/tools/ivf_query_cases", json=bad).status_code, 422, bad)
-            self.assertEqual(client.get("/health").json()["tool_info"]["ivf_query_cases"]["cases"], 1132)
+    def test_endpoint(self):
         with TestClient(tools_server.app) as client:
             self.assertEqual(client.post("/tools/ivf_case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"],
                              [[1132]])
             bad = client.post("/tools/ivf_case_sql", json={"sql": "DELETE FROM cases"})
             self.assertEqual((bad.status_code, bad.json()["error"]), (400, "invalid_sql"))
+            for invalid in ({}, {"sql": ""}, {"sql": "SELECT 1", "filters": []}):
+                self.assertEqual(client.post("/tools/ivf_case_sql", json=invalid).status_code, 422, invalid)
+            self.assertEqual(client.get("/health").json()["tool_info"]["ivf_case_sql"]["cases"], 1132)
+            self.assertEqual(client.post("/tools/ivf_query_cases", json={}).status_code, 404)   # removed
 
     def test_evaluated_case_fold_is_hidden(self):
         case = load_training(PUBLIC).case_ids[5]
         os.environ["IVF_EXCLUDE_CASE"] = case
         with TestClient(tools_server.app) as client:
-            health = client.get("/health").json()["tool_info"]["ivf_query_cases"]
+            health = client.get("/health").json()["tool_info"]["ivf_case_sql"]
         self.assertIn("排除", health["scope"])
         self.assertLess(health["cases"], 1132)
         with TestClient(tools_server.app) as client:
             n = client.post("/tools/ivf_case_sql", json={"sql": "SELECT COUNT(*) FROM cases"}).json()["rows"][0][0]
         self.assertEqual(n, health["cases"])
 
-    def test_mcp_bridge_calls_both_case_tools(self):
+    def test_mcp_bridge_calls_the_sql_tool(self):
         with LiveServer(tools_server.app) as live, \
                 tempfile.TemporaryDirectory() as tmp:
-            specs.write_specs(Path(tmp) / "tools", {"ivf_query_cases": live.url, "ivf_case_sql": live.url})
+            specs.write_specs(Path(tmp) / "tools", {"ivf_case_sql": live.url})
             env = {**os.environ, "OMNI_TOOL_SPECS_DIR": str(Path(tmp) / "tools"), "OMNI_TRACE_DIR": str(Path(tmp) / "trace")}
             calls = [
-                {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ivf_query_cases", "arguments": {
-                    "filters": [{"field": "女方年龄", "op": "<", "value": 35}], "describe": ["女方AMH"]}}},
-                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ivf_case_sql", "arguments": {
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ivf_case_sql", "arguments": {
                     "sql": "SELECT AVG(pregnant) FROM cases WHERE age < 35"}}},
-                {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "ivf_case_sql", "arguments": {
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ivf_case_sql", "arguments": {
                     "sql": "UPDATE cases SET pregnant = 1"}}},
             ]
             out = subprocess.run([sys.executable, str(ROOT / "task" / "runtime" / "claw_tools_mcp.py")], env=env,
                                  timeout=60, input="".join(json.dumps(m) + "\n" for m in calls),
                                  capture_output=True, encoding="utf-8")
             replies = {r["id"]: r for r in map(json.loads, out.stdout.splitlines())}
-            rate = json.loads(replies[1]["result"]["content"][0]["text"])["妊娠结局分布"]["妊娠率"]
-            avg = json.loads(replies[2]["result"]["content"][0]["text"])["rows"][0][0]
-            self.assertAlmostEqual(rate, avg, places=2)
-            self.assertTrue(replies[3]["result"]["isError"])
-
+            avg = json.loads(replies[1]["result"]["content"][0]["text"])["rows"][0][0]
+            self.assertEqual(avg, CaseDatabase(TABLE).sql("SELECT AVG(pregnant) FROM cases WHERE age < 35")["rows"][0][0])
+            self.assertTrue(replies[2]["result"]["isError"])
 
 if __name__ == "__main__":
     unittest.main()

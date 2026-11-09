@@ -2,14 +2,13 @@
 
   POST /tools/ivf_similar_patients   similar training cases by female age and AMH
   POST /tools/ivf_predict_outcome    pregnancy probability, 95% interval and each input's effect
-  POST /tools/ivf_query_cases        structured queries on the training-case database
   POST /tools/ivf_case_sql           one read-only SELECT on the training-case database
   GET  /health                       status, the tools, each tool's data (scope, cases, model), load
   GET  /ivf/audit                    tool calls since start;  POST /ivf/reset clears them
 
 A tool is a module (similar/tool.py, ...) declaring TOOL, TOOL_DESCRIPTION, REQUEST_MODEL, STATE, and
 load(), health(state), call(state, request), summary(response); tools with the same STATE share what
-load() returns (the two case-database tools share one database). Adding a tool = a module in TOOLS.
+load() returns. Adding a tool = a module in TOOLS.
 
 Environment:
   IVF_TOOLS_PORT     9201
@@ -33,13 +32,12 @@ from fastapi.responses import JSONResponse
 
 from ivf_services._base import ServiceKit, run
 from ivf_services.case_sql import tool as case_sql_tool
-from ivf_services.cases import tool as cases_tool
 from ivf_services.predict import tool as predict_tool
 from ivf_services.similar import tool as similar_tool
 
 SERVICE = "ivf_tools"
 PORT_ENV, DEFAULT_PORT = "IVF_TOOLS_PORT", 9201
-TOOLS: tuple[ModuleType, ...] = (similar_tool, predict_tool, cases_tool, case_sql_tool)
+TOOLS: tuple[ModuleType, ...] = (similar_tool, predict_tool, case_sql_tool)
 PATH_PREFIX = "/tools/"
 
 

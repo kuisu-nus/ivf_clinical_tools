@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Start the IVF tool service (FastAPI, one process, one port) and wait until it answers /health.
-# All four tools are served on port $IVF_TOOLS_PORT (ports.sh: default 9201, one port per Dressage
+# Every tool is served on port $IVF_TOOLS_PORT (ports.sh: default 9201, one port per Dressage
 # sandbox slot), each at /tools/<tool name>:
 #   ivf_similar_patients  reads IVF_TRAIN_CSV (default: services/data/train_age_amh_gn.csv, in the repo)
 #   ivf_predict_outcome   reads IVF_MODEL (default: services/models/$IVF_MODEL_NAME,
 #                         IVF_MODEL_NAME default lr_35_indicators.json; fold models for RL)
-#   ivf_query_cases, ivf_case_sql   read IVF_CASE_TABLE (default: services/data/train_cases_35.csv, no IDs)
+#   ivf_case_sql          reads IVF_CASE_TABLE (default: services/data/train_cases_35.csv, no IDs)
 #   IVF_EXCLUDE_CASE  training case under evaluation; its fold is hidden from the similar-patient and case tools
 #   IVF_LOG_DIR       rotating service log (default: $OMNI_TASK_DIR/logs); see services/ivf_services/_base.py
 #   PYTHON            default python3 (needs numpy, fastapi, uvicorn: requirements.txt)

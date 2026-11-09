@@ -125,7 +125,7 @@ bash e2b_eval/run.sh --samples runs/openclaw_dev/samples.jsonl --case 0974
 
 ### 工具服务端口（可选）
 
-runner 在 before_agent 之后用 `curl` 检查工具服务的 `/health`（4 个工具同一端口），默认 9201。如果样本里的 `start_services` 命令改了端口，也要在 runner 环境里设置：
+runner 在 before_agent 之后用 `curl` 检查工具服务的 `/health`（所有工具同一端口），默认 9201。如果样本里的 `start_services` 命令改了端口，也要在 runner 环境里设置：
 
 ```bash
 export IVF_TOOLS_PORT=9201

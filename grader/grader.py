@@ -96,17 +96,10 @@ def _numbers(node: Any) -> list[float]:
     return []
 
 
-def _close(a: Any, b: float | None) -> bool:
-    try:
-        return b is None or abs(float(a) - b) <= 0.05
-    except (TypeError, ValueError):
-        return False
-
-
 # ---- items -----------------------------------------------------------------
 PREDICT_INPUTS = ("age", "amh", "gn_days", "pt", "tt", "wbc", "sperm_survival", "post_wash_im")
 CASE_TOOLS = {"ivf_predict_outcome": PREDICT_INPUTS, "ivf_similar_patients": ("age", "amh")}
-DATABASE_TOOLS = ("ivf_query_cases", "ivf_case_sql")
+DATABASE_TOOLS = ("ivf_case_sql",)
 
 
 def _matches(value: Any, truth: float) -> bool:
@@ -126,7 +119,7 @@ def _tool_use(calls: list[dict[str, Any]], inputs: dict[str, Any]) -> dict[str, 
     coverage     for the successful prediction call that passes the most of them: the share of the
                  case's available inputs (PREDICT_INPUTS listed in metadata.json and not null)
                  passed with the right value; 0 without a prediction call.
-    database     1 if the case database (ivf_query_cases or ivf_case_sql) was queried successfully
+    database     1 if the case database (ivf_case_sql) was queried successfully
                  at least once. Using it more often earns nothing more, and its failed calls lower
                  correctness, so the reward asks for using it, not for calling it many times.
     score = (correctness + coverage + database) / 3; 0 without any tool call.

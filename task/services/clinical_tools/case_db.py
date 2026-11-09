@@ -1,4 +1,4 @@
-"""Training-case database the agent explores itself (structured queries and read-only SQL).
+"""Training-case database the agent explores itself with read-only SQL (tool ivf_case_sql).
 
 Data: ``services/data/train_cases_35.csv`` holds the 1132 cleaned training cases (35 indicators and
 the outcome) without case IDs, in an order fixed by a hash of the ID. The IDs and their order are
@@ -23,12 +23,9 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-import numpy as np
-
 from clinical_tools.cleaning import load_training
-from clinical_tools.common import FEATURE_NAMES, assign_folds, wilson_interval
+from clinical_tools.common import FEATURE_NAMES, assign_folds
 
-MIN_COHORT = 15
 SQL_MAX_ROWS = 200
 SQL_TIMEOUT_S = 2.0
 K_FOLDS = 5
@@ -85,13 +82,12 @@ class CaseDatabase:
                 raise ValueError("unexpected case table header")
             rows = [r for r in reader if exclude_fold is None or int(r[0]) != exclude_fold]
         self.scope = "全部训练病例" if exclude_fold is None else f"训练病例中排除当前病例所在的 1/{K_FOLDS}"
-        self.matrix = np.array([[float(v) if v else np.nan for v in r[1:-1]] for r in rows])
-        self.labels = np.array([int(r[-1]) for r in rows])
+        self.labels = [int(r[-1]) for r in rows]
         db = sqlite3.connect(":memory:", check_same_thread=False)
         cols = ", ".join(f"{c} REAL" for c in COLUMNS.values())
         db.execute(f"CREATE TABLE cases ({cols}, {OUTCOME} INTEGER)")
         db.executemany(f"INSERT INTO cases VALUES ({', '.join('?' * (len(COLUMNS) + 1))})",
-                       [[None if math.isnan(v) else v for v in m] + [int(y)] for m, y in zip(self.matrix, self.labels)])
+                       [[float(v) if v else None for v in r[1:-1]] + [int(r[-1])] for r in rows])
         db.execute("CREATE TABLE fields (column_name TEXT, indicator TEXT)")
         db.executemany("INSERT INTO fields VALUES (?, ?)", [(c, n) for n, c in COLUMNS.items()]
                        + [(OUTCOME, "临床妊娠结局（1 妊娠，0 未妊娠）")])
@@ -101,55 +97,6 @@ class CaseDatabase:
         self.db = db
         self._lock = threading.Lock()      # one connection, used from the service's worker threads
 
-    # ---- structured queries -------------------------------------------------------------
-    def column(self, name: str) -> np.ndarray:
-        return self.matrix[:, FEATURE_NAMES.index(name)]
-
-    def query(self, filters: Sequence[dict] = (), group_by: dict | None = None,
-              describe: Sequence[str] = ()) -> dict:
-        mask = np.ones(len(self.labels), dtype=bool)
-        texts = []
-        for f in filters:
-            values, op = self.column(f["field"]), f["op"]
-            with np.errstate(invalid="ignore"):
-                if op == "missing":
-                    m = np.isnan(values)
-                elif op == "present":
-                    m = ~np.isnan(values)
-                elif op == "between":
-                    m = (values >= f["value"]) & (values <= f["value2"])
-                else:
-                    m = {">": values > f["value"], ">=": values >= f["value"], "<": values < f["value"],
-                         "<=": values <= f["value"], "=": values == f["value"]}[op]
-            mask &= m
-            texts.append(_describe_filter(f))
-        n = int(mask.sum())
-        result = {"筛选条件": "；".join(texts) or "无（全部可见病例）", "检索范围": self.scope,
-                  "可检索病例数": len(self.labels), "符合条件例数": n, "最低例数门槛": MIN_COHORT}
-        result["妊娠结局分布"] = _outcome(self.labels[mask])
-        if group_by:
-            values = self.column(group_by["field"])[mask]
-            labels = self.labels[mask]
-            cuts = sorted(group_by["cuts"])
-            edges = [-math.inf, *cuts, math.inf]
-            groups = []
-            for lo, hi in zip(edges, edges[1:]):
-                with np.errstate(invalid="ignore"):
-                    g = (values >= lo) & (values < hi)
-                groups.append({"分组": _range_text(group_by["field"], lo, hi), "例数": int(g.sum()),
-                               "妊娠结局分布": _outcome(labels[g])})
-            missing = np.isnan(values)
-            if missing.any():
-                groups.append({"分组": f"{group_by['field']} 缺失", "例数": int(missing.sum()),
-                               "妊娠结局分布": _outcome(labels[missing])})
-            result["分组统计"] = groups
-        if describe:
-            result["指标分布"] = {name: _distribution(self.column(name)[mask], self.labels[mask]) for name in describe}
-        result["说明"] = ("统计来自去掉病例编号的训练病例；妊娠率是人群的观察结果，是相关性，不是当前患者的预测概率。"
-                        f"例数少于 {MIN_COHORT} 时不报告妊娠率。")
-        return result
-
-    # ---- read-only SQL --------------------------------------------------------------------
     def sql(self, statement: str) -> dict:
         with self._lock:
             return self._sql(statement)
@@ -186,50 +133,6 @@ def _jsonable(value):
     if isinstance(value, float):
         return round(value, 4) if math.isfinite(value) else None
     return value
-
-
-def _outcome(labels: np.ndarray) -> dict:
-    n = len(labels)
-    if n < MIN_COHORT:
-        return {"拒绝统计": True, "原因": f"只有 {n} 例，少于 {MIN_COHORT} 例，不报告妊娠率"}
-    positives = int(labels.sum())
-    low, high = wilson_interval(positives, n)
-    return {"临床妊娠": positives, "未妊娠": n - positives, "妊娠率": round(positives / n, 3),
-            "95%置信区间": [round(low, 3), round(high, 3)]}
-
-
-def _distribution(values: np.ndarray, labels: np.ndarray) -> dict:
-    present = ~np.isnan(values)
-    out = {"有记录例数": int(present.sum()), "缺失例数": int((~present).sum())}
-    v = values[present]
-    if len(v):
-        q1, med, q3 = np.percentile(v, [25, 50, 75])
-        out.update({"中位数": round(float(med), 3), "四分位数": [round(float(q1), 3), round(float(q3), 3)],
-                    "最小值": round(float(v.min()), 3), "最大值": round(float(v.max()), 3)})
-    for label, name in ((1, "妊娠者中位数"), (0, "未妊娠者中位数")):
-        sub = values[present & (labels == label)]
-        if len(sub) >= MIN_COHORT:
-            out[name] = round(float(np.median(sub)), 3)
-    return out
-
-
-def _describe_filter(f: dict) -> str:
-    op = f["op"]
-    if op == "missing":
-        return f"{f['field']} 缺失"
-    if op == "present":
-        return f"{f['field']} 有记录"
-    if op == "between":
-        return f"{f['field']} {f['value']:g}–{f['value2']:g}"
-    return f"{f['field']} {op} {f['value']:g}"
-
-
-def _range_text(field: str, lo: float, hi: float) -> str:
-    if lo == -math.inf:
-        return f"{field} < {hi:g}"
-    if hi == math.inf:
-        return f"{field} ≥ {lo:g}"
-    return f"{field} {lo:g}–{hi:g}（不含 {hi:g}）"
 
 
 def main(argv: Sequence[str] | None = None) -> None:

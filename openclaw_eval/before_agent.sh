@@ -34,7 +34,7 @@ health = service["tool_info"]
 model = settings.get("IVF_MODEL_NAME", "lr_35_indicators.json")
 if health["ivf_predict_outcome"]["model"] != model:
     sys.exit(f"prediction tool uses {health['ivf_predict_outcome']['model']}, expected {model}")
-for name in ("ivf_similar_patients", "ivf_query_cases", "ivf_case_sql"):
+for name in ("ivf_similar_patients", "ivf_case_sql"):
     if "IVF_EXCLUDE_CASE" in settings and "排除" not in health[name]["scope"]:
         sys.exit(f"{name} does not hold out the case: {health[name]['scope']}")
 json.dump({"service_env": settings, "health": health}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)

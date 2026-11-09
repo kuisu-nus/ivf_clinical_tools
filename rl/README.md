@@ -101,7 +101,7 @@ nohup bash rl/run_ivf_claw_h20.sh > runs/ivf-claw-v1.log 2>&1 &
 
 ## 端口说明
 
-bubblewrap 沙箱共用本机网络。如果每个沙箱都用 9201，后启动的沙箱会连到先启动的沙箱的服务，拿到排除了另一个病例的数据。所以 `task/scripts/ports.sh` 按沙箱编号（`DRESSAGE_BLACKBOX_SLOT_ID`）分配端口：20000 + 编号（4 个工具都在这一个端口上）。`register_mcp.sh` 通过 `OMNI_TOOL_PORT_MAP` 告诉 MCP 工具桥实际端口。`start_services.sh` 还会检查回应健康检查的确实是刚启动的服务。只有数字编号（本机 bubblewrap）才换端口；E2B 中每个沙箱有自己的网络，Dressage 把编号设为 `e2b`，仍用 9201。
+bubblewrap 沙箱共用本机网络。如果每个沙箱都用 9201，后启动的沙箱会连到先启动的沙箱的服务，拿到排除了另一个病例的数据。所以 `task/scripts/ports.sh` 按沙箱编号（`DRESSAGE_BLACKBOX_SLOT_ID`）分配端口：20000 + 编号（所有工具都在这一个端口上）。`register_mcp.sh` 通过 `OMNI_TOOL_PORT_MAP` 告诉 MCP 工具桥实际端口。`start_services.sh` 还会检查回应健康检查的确实是刚启动的服务。只有数字编号（本机 bubblewrap）才换端口；E2B 中每个沙箱有自己的网络，Dressage 把编号设为 `e2b`，仍用 9201。
 
 ## 排错：before_agent 命令失败
 

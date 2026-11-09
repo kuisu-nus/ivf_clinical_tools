@@ -100,7 +100,7 @@ bash openclaw_eval/after_agent.sh  $C $R
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `IVF_TOOLS_PORT` | 9301 | 工具服务端口（4 个工具同一端口）。改了之后要重新运行 `prepare.sh` |
+| `IVF_TOOLS_PORT` | 9301 | 工具服务端口（所有工具同一端口）。改了之后要重新运行 `prepare.sh` |
 | `OC_WORKSPACE` | `~/.openclaw/workspace` | 使用哪个 OpenClaw 工作区的 AGENTS.md |
 | `OC_EVAL_WORK` | `outputs/openclaw` | 工具配置、调用记录、服务日志、备份的位置 |
 | `OC_LOCAL` | 0 | 设为 1 时用 `openclaw agent --local`（不经过 Gateway） |

@@ -1,20 +1,26 @@
 """Tool ivf_case_sql: one read-only SELECT on the training-case database (clinical_tools.case_db).
-Served by ivf_services/server.py at POST /tools/ivf_case_sql; shares the database with ivf_query_cases.
+Served by ivf_services/server.py at POST /tools/ivf_case_sql.
 
 The database is in memory and holds only the visible cases (no IDs, the fold of the case under
 evaluation removed); writes, ATTACH and PRAGMA are refused, queries stop after 2 s, at most 200 rows.
-A refused or failing statement is a client error (400, invalid_sql). Environment: as cases/tool.py.
+A refused or failing statement is a client error (400, invalid_sql).
+
+Environment:
+  IVF_CASE_TABLE    case table (default: services/data/train_cases_35.csv, in the repository, no IDs)
+  IVF_EXCLUDE_CASE  training case under evaluation: its fold, looked up in IVF_TRAIN_CSV (ID-bearing,
+                    default services/data/train_age_amh_gn.csv), is hidden, as in the other tools
+  IVF_EXCLUDE_FOLD  hide this fold instead
 """
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clinical_tools.case_db import COLUMNS, OUTCOME, SQL_MAX_ROWS, SQL_TIMEOUT_S
-from clinical_tools.case_db import CaseDatabase
-from ivf_services.case_db_loader import load_database
+from clinical_tools.case_db import COLUMNS, OUTCOME, SQL_MAX_ROWS, SQL_TIMEOUT_S, CaseDatabase, fold_of
 
 TOOL = "ivf_case_sql"
 TOOL_DESCRIPTION = (
@@ -37,14 +43,23 @@ REQUEST_MODEL = CaseSqlRequest
 
 STATE = "case_db"
 CLIENT_ERROR = "invalid_sql"   # a ValueError from call() is answered 400 with this error code
+DATA = Path(__file__).resolve().parents[2] / "data"
 
 
 def load() -> CaseDatabase:
-    return load_database()[0]
+    table = os.environ.get("IVF_CASE_TABLE") or DATA / "train_cases_35.csv"
+    fold, case = os.environ.get("IVF_EXCLUDE_FOLD"), os.environ.get("IVF_EXCLUDE_CASE")
+    if fold:
+        exclude = int(fold)
+    elif case:
+        exclude = fold_of(case, os.environ.get("IVF_TRAIN_CSV") or DATA / "train_age_amh_gn.csv")
+    else:
+        exclude = None
+    return CaseDatabase(table, exclude_fold=exclude)
 
 
 def health(db: CaseDatabase) -> dict[str, Any]:
-    return {"scope": db.scope, "cases": int(len(db.labels))}
+    return {"scope": db.scope, "cases": len(db.labels)}
 
 
 def call(db: CaseDatabase, req: CaseSqlRequest) -> dict[str, Any]:

@@ -54,7 +54,6 @@
   "tools": [
     "tools/ivf_predict_outcome.json",
     "tools/ivf_similar_patients.json",
-    "tools/ivf_query_cases.json",
     "tools/ivf_case_sql.json"
   ],
   "grader": {

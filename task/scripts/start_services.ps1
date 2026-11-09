@@ -1,4 +1,4 @@
-# Start the IVF tool service (all four tools, one process, one port) in the background on Windows
+# Start the IVF tool service (every tool, one process, one port) in the background on Windows
 # (PowerShell 5.1 or 7) and wait until it answers /health. The Windows counterpart of start_services.sh.
 #
 #   powershell -ExecutionPolicy Bypass -File task\scripts\start_services.ps1

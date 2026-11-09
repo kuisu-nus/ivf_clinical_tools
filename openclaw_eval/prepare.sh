@@ -23,7 +23,7 @@ import os, sys
 from pathlib import Path
 from ivf_services.specs import write_specs
 base = f"http://127.0.0.1:{os.environ['IVF_TOOLS_PORT']}"
-urls = {name: base for name in ("ivf_similar_patients", "ivf_predict_outcome", "ivf_query_cases", "ivf_case_sql")}
+urls = {name: base for name in ("ivf_similar_patients", "ivf_predict_outcome", "ivf_case_sql")}
 for path in write_specs(Path(sys.argv[1]), urls):
     print("  ", path)
 PY

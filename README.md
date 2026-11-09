@@ -38,9 +38,9 @@ tasks/<task_id>/
 |---|---|
 | 目标一：相似患者检索 `ivf_similar_patients` | 已完成，URL 测试通过 |
 | 目标一：妊娠预测 ML `ivf_predict_outcome` | 已完成：35 项指标训练、预测接收 8 项输入（年龄、AMH、Gn 天数和系数最大的 5 项），训练与预测分离，URL 测试通过 |
-| 病例数据库 `ivf_query_cases`、`ivf_case_sql` | 1132 例训练病例（35 项指标和结局，无病例编号）供 agent 自行探索：结构化查询和只读 SQL |
+| 病例数据库 `ivf_case_sql` | 1132 例训练病例（35 项指标和结局，无病例编号）供 agent 用只读 SQL 自行探索 |
 | 目标二：Claude Code 自主调用、分析、回溯 | 已完成：Claude Code 自主调用两个服务并比较结果，调用轨迹写入 `dispatches.jsonl` |
-| 服务实现 | 4 个工具在同一个进程、同一个端口（9201），按工具名访问 `POST /tools/<工具名>`；FastAPI + Pydantic；计算在固定大小的线程池中异步执行，并发有上限；日志写入文件并滚动；检索策略和返回字段可扩展 |
+| 服务实现 | 所有工具（3 个）在同一个进程、同一个端口（9201），按工具名访问 `POST /tools/<工具名>`；FastAPI + Pydantic；计算在固定大小的线程池中异步执行，并发有上限；日志写入文件并滚动；检索策略和返回字段可扩展 |
 
 ### 仓库结构（本仓库即一个任务目录）
 
@@ -49,14 +49,13 @@ tasks/<task_id>/
 ├── task/
 │   ├── prompt.md                    # 示例病例（三阶段格式）：虚构患者 38 岁、AMH 0.9、Gn 10 天
 │   ├── scripts/                     # start_services.sh 启动工具服务（一个进程）；stop_services.sh；setup.sh
-│   ├── tools/                       # 4 个工具规格（→ 9201/tools/<工具名>），由代码生成
+│   ├── tools/                       # 工具规格（→ 9201/tools/<工具名>），由代码生成
 │   ├── services/
 │   │   ├── ivf_services/            # HTTP 服务（FastAPI）
 │   │   │   ├── server.py            #   一个进程、一个端口（9201），每个工具在 POST /tools/<工具名>
 │   │   │   ├── similar/tool.py      #   工具一：相似患者：请求模型、加载训练数据、调用
 │   │   │   ├── predict/tool.py      #   工具二：妊娠预测：请求模型、只读模型文件
-│   │   │   ├── cases/tool.py        #   工具三：病例数据库结构化查询
-│   │   │   ├── case_sql/tool.py     #   工具四：病例数据库只读 SQL（与工具三共用一个数据库）
+│   │   │   ├── case_sql/tool.py     #   工具三：病例数据库只读 SQL
 │   │   │   ├── _base.py             #   共用：日志、有上限的计算线程池、audit/reset/health、错误处理
 │   │   │   └── specs.py             #   由请求模型生成 task/tools 工具规格和 system prompt 的工具部分
 │   │   ├── clinical_tools/          # 计算逻辑，只依赖 numpy，不涉及 Web
@@ -65,7 +64,7 @@ tasks/<task_id>/
 │   │   │   ├── similar.py           #   相似患者检索：可替换的检索策略 + 统一的门槛与统计
 │   │   │   ├── predict.py           #   逻辑回归：train_model（35 项训练）与 Predictor（三项输入预测）
 │   │   │   ├── train_predictor.py   #   训练脚本：训练数据 → 模型文件
-│   │   │   ├── case_db.py           #   病例数据库：生成无编号病例表、查询与只读 SQL
+│   │   │   ├── case_db.py           #   病例数据库：生成无编号病例表、只读 SQL
 │   │   │   └── public_data.py       #   生成仓库中的训练集（只保留三项输入）
 │   │   ├── models/lr_35_indicators.json  # 训练好的模型文件（只含系数、协方差、均值等汇总量）
 │   │   ├── models/lr_35_indicators_fold{0-4}.json  # 各自去掉一折训练的模型（RL 时用，避免病例看到自己）
@@ -137,13 +136,12 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 - 注意：Gn 用药总天数在数据中只有 8–12 天五个取值，疑似被截断；年龄线性进入，对 37 岁以后妊娠率加速下降刻画不足。
 - agentic RL 时如需排除被评估病例，用 `train_predictor --exclude-case <ID>` 另训一个模型文件。
 
-### 工具三、四：病例数据库 `ivf_query_cases`、`ivf_case_sql`
+### 工具三：病例数据库 `ivf_case_sql`
 
 让 agent 自己探索训练病例：哪些指标、在什么范围内和结局相关，当前患者所在人群是什么情况。数据是 `task/services/data/train_cases_35.csv`：1132 例训练病例按工具相同的规则清洗后的 35 项指标和结局（公开数据），由 `python -m clinical_tools.case_db --source <训练集CSV> --out task/services/data/train_cases_35.csv` 生成。
 
 - **防止结局泄露**：表里没有病例编号，行顺序按编号的哈希打乱（这个数据集里编号和行顺序本身就能分出结局）；283 例测试集不在表中。每行带一个 agent 看不到的 `fold` 列：设了 `IVF_EXCLUDE_CASE` 时（RL 训练），启动时按 `train_age_amh_gn.csv` 查出该病例的折并整折去掉，和相似患者工具、折外预测模型排除的是同一折。
-- **`ivf_query_cases`**：`filters`（任意指标，`> >= < <= = between missing present`，同时满足）、`group_by`（按某指标分段统计妊娠率）、`describe`（指标分布及妊娠者 / 未妊娠者中位数）。少于 15 例不报告妊娠率。
-- **`ivf_case_sql`**：一条只读 SELECT（SQLite），表 `cases`（35 列英文列名 + `pregnant`）和 `fields`（列名与中文指标名对照）。数据库在内存中，只含可见病例；写入、ATTACH、PRAGMA 被拒绝，查询超过 2 秒中止，最多返回 200 行。
+- **用法**：一条只读 SELECT（SQLite），表 `cases`（35 列英文列名 + `pregnant`）和 `fields`（列名与中文指标名对照）。数据库在内存中，只含可见病例；写入、ATTACH、PRAGMA 被拒绝，查询超过 2 秒中止，最多返回 200 行。
 
 ### 服务实现
 
@@ -175,12 +173,11 @@ IVF_MODEL=task/services/models/lr_35_indicators.json python task/services/ivf_se
 pip install -r requirements.txt   # numpy、fastapi、pydantic、uvicorn
 # 1.（可选）想用完整数据时：清洗原始训练集，启动时用 IVF_TRAIN_CSV=outputs/clean_v1/train_clean.csv 指定
 PYTHONPATH=task/services python -m clinical_tools.cleaning --input xgb_train_1132.csv --out-dir outputs/clean_v1
-# 2. 一键启动工具服务（4 个工具，一个进程，端口 9201；默认读取仓库中的数据和模型文件；局域网访问加 IVF_TOOLS_HOST=0.0.0.0）
+# 2. 一键启动工具服务（所有工具，一个进程，端口 9201；默认读取仓库中的数据和模型文件；局域网访问加 IVF_TOOLS_HOST=0.0.0.0）
 bash task/scripts/start_services.sh
 # 3. URL 测试
 curl -X POST http://127.0.0.1:9201/tools/ivf_similar_patients -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9}'
 curl -X POST http://127.0.0.1:9201/tools/ivf_predict_outcome -H 'Content-Type: application/json' -d '{"age": 38, "amh": 0.9, "gn_days": 10}'
-curl -X POST http://127.0.0.1:9201/tools/ivf_query_cases -H 'Content-Type: application/json' -d '{"filters": [{"field": "女方年龄", "op": ">=", "value": 38}]}'
 curl -X POST http://127.0.0.1:9201/tools/ivf_case_sql -H 'Content-Type: application/json' -d '{"sql": "SELECT pregnant, COUNT(*) FROM cases GROUP BY pregnant"}'
 # 另有：GET /health，GET /ivf/audit（调用记录），POST /ivf/reset；接口文档：http://127.0.0.1:9201/docs
 # 日志：/tmp/omni_task/logs/ivf_tools.log（OMNI_TASK_DIR 或 IVF_LOG_DIR 可改）
@@ -226,7 +223,7 @@ Agent 按阶段顺序分析，但每段查什么、调用哪些工具、调用�
 | 项目 | 权重 | 规则 |
 |---|---|---|
 | outcome | 0.70 | 答对 1.0、答错 0、不确定 0.5，不区分真实结局（不再按类别平衡）。注意：训练集妊娠率 39%，一律答未妊娠的期望结局分是 0.61，高于一律答妊娠（0.39）和不确定（0.5） |
-| tool_use | 0.15 | 不规定调用顺序和次数，三部分各占三分之一：① **调用正确率**：所有工具调用中，成功且（预测、相似病例工具）参数都来自病例的比例；调用失败（参数不合法、SQL 被拒或出错、用 0 代替缺失等）或传了病例没有的指标（metadata 里为 null）都算错；② **预测输入覆盖率**：传参最全的那次预测调用传对了病例中可用的几项预测输入（共 8 项）；③ **使用病例库**：至少成功查询过一次病例库（`ivf_query_cases` 或 `ivf_case_sql`）记 1，多查不再加分，查错的计入①。没有任何工具调用记 0 |
+| tool_use | 0.15 | 不规定调用顺序和次数，三部分各占三分之一：① **调用正确率**：所有工具调用中，成功且（预测、相似病例工具）参数都来自病例的比例；调用失败（参数不合法、SQL 被拒或出错、用 0 代替缺失等）或传了病例没有的指标（metadata 里为 null）都算错；② **预测输入覆盖率**：传参最全的那次预测调用传对了病例中可用的几项预测输入（共 8 项）；③ **使用病例库**：至少成功查询过一次病例库（`ivf_case_sql`）记 1，多查不再加分，查错的计入①。没有任何工具调用记 0 |
 | faithfulness | 0.10 | 回答中的百分数和"N 例"都能在工具返回中找到（另允许总体 39% 和 95% 置信水平） |
 | format | 0.05 | 三个阶段按顺序出现，结论在最后一行（另记录回答字数，不计分） |
 | 门槛 | — | 出现治疗或用药建议，整题 0 分 |
@@ -288,7 +285,7 @@ PYTHONPATH=task/services:tests python -m unittest discover -s tests
 - OpenClaw 评估脚本（`tests/test_openclaw_eval.py`）：agent 阶段只保留回答（去掉进度行）、after_agent 对示例重新评分得到相同分数、工具说明写入指定的 AGENTS.md。
 - 沙箱端口（`tests/test_sandbox_ports.py`）：按沙箱编号分配端口（E2B 的非数字编号 `e2b` 用 9201）、MCP 工具桥按映射改写地址、两个沙箱同时运行时各自只连到自己的服务、端口被旧服务占用时拒绝启动。
 - 仓库中的训练集：列与原数据一致、只有三项输入逐例不同、其余为均值；相似检索结果与文档中的数字一致（23 例、17.4%）。
-- 工具规格与 system prompt 与请求模型一致，4 个工具都在 9201、各自路径 `/tools/<工具名>`；MCP 桥接调用工具，参数错误时返回 isError；一个端口按工具名分别访问，未知工具名返回 404。
+- 工具规格与 system prompt 与请求模型一致，所有工具都在 9201、各自路径 `/tools/<工具名>`；MCP 桥接调用工具，参数错误时返回 isError；一个端口按工具名分别访问，未知工具名返回 404。
 
 ## Results
 
