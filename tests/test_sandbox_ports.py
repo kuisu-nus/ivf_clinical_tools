@@ -51,8 +51,9 @@ class PortTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "runtime" / "bbs-s1" / "home").mkdir(parents=True)
-            stub = tmp / "openclaw"                       # records `openclaw mcp set <name> <json>`
-            stub.write_text('#!/usr/bin/env bash\necho "$HOME" > "$STUB_OUT.home"; echo "$4" > "$STUB_OUT"\n')
+            stub = tmp / "openclaw"           # logs every call; keeps the JSON of `openclaw mcp set <name> <json>`
+            stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$STUB_OUT.calls"\n'
+                            'if [ "$1 $2" = "mcp set" ]; then echo "$HOME" > "$STUB_OUT.home"; echo "$4" > "$STUB_OUT"; fi\n')
             stub.chmod(0o755)
             env = {**os.environ, "BBS_RUNTIME_ROOT": str(tmp / "runtime"), "OPENCLAW_BIN": str(stub),
                    "STUB_OUT": str(tmp / "out"), "DRESSAGE_BLACKBOX_SLOT_ID": "2"}
@@ -62,6 +63,12 @@ class PortTests(unittest.TestCase):
             self.assertEqual(config["env"]["OMNI_TOOL_PORT_MAP"], "9201:20002")
             self.assertEqual(config["env"]["OMNI_TOOL_SPECS_DIR"], "/tmp/omni_task/tools")
             self.assertEqual((tmp / "out.home").read_text().strip(), str(tmp / "runtime" / "bbs-s1" / "home"))
+            calls = (tmp / "out.calls").read_text().splitlines()
+            # OpenClaw settings first (the minimal profile would otherwise drop the MCP tools), then the server
+            self.assertEqual([c.split()[2] if c.startswith("config") else c.split()[0] for c in calls],
+                             ["tools.profile", "agents.list", "tools.alsoAllow", "mcp", "tools.alsoAllow"])
+            self.assertIn("bundle-mcp", calls[2])
+            self.assertTrue(calls[4].startswith("config get"))
             del env["DRESSAGE_BLACKBOX_SLOT_ID"]
             subprocess.run([BASH, str(SCRIPTS / "register_mcp.sh")], env=env, check=True, capture_output=True)
             self.assertNotIn("OMNI_TOOL_PORT_MAP", json.loads((tmp / "out").read_text())["env"])

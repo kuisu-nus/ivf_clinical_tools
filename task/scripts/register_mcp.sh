@@ -5,6 +5,10 @@
 # OpenClaw's HOME is the one BlackboxServer prepared: $BBS_RUNTIME_ROOT/bbs-*/home. When the tool
 # service runs on another port than the specs' 9201 (see ports.sh), OMNI_TOOL_PORT_MAP tells the
 # MCP bridge where to send the calls.
+#
+# OpenClaw settings for this task: the minimal tool profile and no skills keep the context short;
+# tools.alsoAllow lets the MCP tools (bundle-mcp) and file/runtime tools through that profile,
+# which otherwise drops the claw-tools. The final line prints tools.alsoAllow into the rollout log.
 set -euo pipefail
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPTS/ports.sh"
@@ -24,5 +28,10 @@ print(json.dumps({"command": "python3", "args": [f"{task_dir}/runtime/claw_tools
                   "cwd": task_dir}))
 PY
 )"
+HOME="$OC_HOME" "${OPENCLAW_BIN:-openclaw}" config set tools.profile minimal
+HOME="$OC_HOME" "${OPENCLAW_BIN:-openclaw}" config set agents.list '[{"id":"main","skills":[]}]'
+HOME="$OC_HOME" "${OPENCLAW_BIN:-openclaw}" config set tools.alsoAllow '["group:fs", "group:runtime","bundle-mcp"]'
+
 HOME="$OC_HOME" "${OPENCLAW_BIN:-openclaw}" mcp set claw-tools "$config"
 echo "registered claw-tools for $OC_HOME (tools :$IVF_TOOLS_PORT)"
+HOME="$OC_HOME" "${OPENCLAW_BIN:-openclaw}" config get tools.alsoAllow
