@@ -67,13 +67,33 @@ trap 'kill "$SERVICE_PID" 2>/dev/null || true; rm -f "$TASK_DIR/service-ivf_tool
 
 # The answer must come from the service just started: another service already on the port
 # (someone else's, which we cannot stop) would serve the wrong data.
-"$PYTHON" - "$IVF_SERVICE_INSTANCE" "$IVF_TOOLS_PORT" <<'PY'
-import json, sys, time, urllib.error, urllib.request
+# If the service exits or never answers, the end of its log goes to stderr, where Dressage records it.
+"$PYTHON" - "$IVF_SERVICE_INSTANCE" "$IVF_TOOLS_PORT" "$SERVICE_PID" "$TASK_DIR/service-ivf_tools.log" <<'PY'
+import json, os, sys, time, urllib.error, urllib.request
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-instance, port = sys.argv[1:]
+instance, port, pid, log = sys.argv[1:]
 url = f"http://127.0.0.1:{port}/health"
-deadline = time.time() + 90
+deadline = time.time() + 75               # before the 90 s limit of the start_services command
+
+def fail(reason):
+    try:
+        with open(log, encoding="utf-8", errors="replace") as handle:
+            tail = handle.readlines()[-40:]
+    except OSError as exc:
+        tail = [f"(cannot read {log}: {exc})\n"]
+    sys.stderr.write(f"{reason}\n--- last lines of {log} ---\n{''.join(tail)}")
+    sys.exit(1)
+
+def exited():                             # gone, or a zombie not yet reaped by the shell
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except OSError:
+        return True
+
 while True:
+    if exited():
+        fail(f"service exited before it was ready (pid {pid}, python {sys.version.split()[0]}, uid {os.getuid()})")
     try:
         request = urllib.request.Request(url, headers={"X-Health-Check": "1"})
         with opener.open(request, timeout=2) as resp:
@@ -90,8 +110,7 @@ while True:
         sys.exit(f"port {port} is held by another service; free it or set IVF_TOOLS_PORT")
     except OSError:                       # not listening yet
         if time.time() > deadline:
-            sys.stderr.write(f"service did not become ready at {url}\n")
-            sys.exit(1)
+            fail(f"service did not become ready at {url} within 75 s")
         time.sleep(0.5)
 PY
 trap - EXIT
