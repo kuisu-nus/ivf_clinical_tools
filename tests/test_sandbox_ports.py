@@ -20,7 +20,7 @@ import claw_tools_mcp  # noqa: E402
 
 
 def port(**env):
-    out = subprocess.run([BASH, "-c", f'source "{SCRIPTS / "ports.sh"}"; echo $IVF_TOOLS_PORT'],
+    out = subprocess.run([BASH, "-c", f'set -euo pipefail; source "{SCRIPTS / "ports.sh"}"; echo $IVF_TOOLS_PORT'],
                          env={k: v for k, v in {**os.environ, **env}.items() if k != "IVF_TOOLS_PORT" or k in env},
                          capture_output=True, text=True, check=True)
     return int(out.stdout)
@@ -29,7 +29,9 @@ def port(**env):
 @unittest.skipUnless(BASH, "needs bash")
 class PortTests(unittest.TestCase):
     def test_port_choice(self):
-        self.assertEqual(port(), 9201)                                            # E2B: one sandbox per network
+        self.assertEqual(port(), 9201)                                            # no slot: one sandbox per network
+        self.assertEqual(port(DRESSAGE_BLACKBOX_SLOT_ID="e2b"), 9201)             # Dressage's E2B sandboxes
+        self.assertEqual(port(DRESSAGE_BLACKBOX_SLOT_ID="08"), 20008)             # not read as octal
         self.assertEqual(port(DRESSAGE_BLACKBOX_SLOT_ID="3"), 20003)                # local_bwrap slot 3
         self.assertEqual(port(DRESSAGE_BLACKBOX_SLOT_ID="3", IVF_PORT_BASE="30000"), 30003)
         self.assertEqual(port(DRESSAGE_BLACKBOX_SLOT_ID="3", IVF_TOOLS_PORT="9301"), 9301)   # explicit port wins
