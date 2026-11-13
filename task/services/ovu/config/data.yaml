@@ -1,0 +1,129 @@
+# 获卵数预测：数据清洗、统计与划分的配置。
+# 新增字段：在 columns 下加一项（会自动进入统计报告、Word 文档和数据库）；新增诊断类别：在 diagnosis.flags 下加一项。脚本不需要改。
+#
+# 每个字段一项（删掉一项，这个字段就不再加载，统计、文档、模型、相似病例和数据库都跟着去掉）：
+#   name              中文名，统计报告、Word 文档和数据库列说明都用它
+#   source            原始列名
+#   type              int | float | category
+#   stage             预测时点。baseline = 进周期前已知；plan = 启动时确定的方案；
+#                     during = 促排过程中才知道（启动前预测时不能用）
+#   range             [下限, 上限]，超出的值记为缺失（不删行）
+#   zero_is_missing   true 时 0 记为缺失（化验值不可能为 0）
+#   min_count         类别字段：出现次数少于它的取值并入“其他”
+#   note              备注，写进统计报告
+
+id_column: 周期号            # 只用于去重和划分，不进入任何特征、检索或输出
+
+duplicates: drop_all         # 周期号重复但内容不同的行：drop_all 全部去掉 | keep_first 保留第一条
+
+label:
+  name: oocytes
+  source: 卵子总数
+  range: [0, 80]
+  # 分组的上界（含）。[3, 9, 15, 25] 表示 0–3、4–9、10–15、16–25、≥26
+  bins: [3, 9, 15, 25]
+
+columns:
+  age:                {name: "女方年龄（岁）", source: 女方年龄, type: int, stage: baseline, range: [18, 55]}
+  infertility_years:  {name: "不孕年限（年）", source: 不孕年限, type: float, stage: baseline, range: [0, 30],
+                       note: "0 占 28%，含义待确认（不足 1 年，还是未填）"}
+  height_cm:          {name: "身高（cm）", source: 身高(cm), type: float, stage: baseline, range: [130, 190]}
+  weight_kg:          {name: "体重（kg）", source: 体重(kg), type: float, stage: baseline, range: [30, 130]}
+  bmi:                {name: "体重指数（BMI）", source: 体重指数, type: float, stage: baseline, range: [13, 50]}
+  pulse:              {name: "脉搏", source: 脉搏, type: float, stage: baseline, range: [40, 140]}
+  fsh:                {name: "FSH", source: 内分泌FSH, type: float, stage: baseline, range: [0.1, 100], zero_is_missing: true}
+  lh:                 {name: "LH", source: 内分泌LH, type: float, stage: baseline, range: [0.05, 100], zero_is_missing: true}
+  prl:                {name: "PRL", source: 内分泌PRL, type: float, stage: baseline, range: [0.5, 500], zero_is_missing: true}
+  e2:                 {name: "E2", source: 内分泌E2, type: float, stage: baseline, range: [1, 1000], zero_is_missing: true,
+                       note: "单位待确认（pg/mL 或 pmol/L）"}
+  testosterone:       {name: "T", source: 内分泌T, type: float, stage: baseline, range: [0.01, 10], zero_is_missing: true,
+                       note: "单位待确认；P99.9 为 25.6，疑似混有两种单位"}
+  amh:                {name: "AMH", source: AMH, type: float, stage: baseline, range: [0.01, 30], zero_is_missing: true,
+                       note: "缺失 43%"}
+  afc_downreg:        {name: "降调日窦卵泡数", source: 降调日当天窦卵泡数, type: float, stage: baseline, range: [1, 60], zero_is_missing: true,
+                       note: "0 占 52%，按未记录处理；是否只有降调方案才记录，待确认"}
+  protocol:           {name: "用药方案", source: 用药方案明细, type: category, stage: plan, min_count: 50}
+  gnrha_drug:         {name: "GnRH 类药物", source: GnRha开始用药, type: category, stage: plan, min_count: 50,
+                       replace: {"加尼瑞克（晴乐）": 加尼瑞克, "尼瑞克": 加尼瑞克, "金磊针（曲普瑞林）": 曲普瑞林}}
+  gnrha_start_dose:   {name: "GnRHa 开始量", source: GnRha开始量, type: float, stage: plan, range: [0.01, 5]}
+  gn_start_dose:      {name: "启动 Gn 用量", source: 启动Gn用量, type: float, stage: plan, range: [25, 600]}
+  gn_start_day:       {name: "启动 Gn 时机（周期第几天）", source: 启动Gn时机, type: int, stage: plan, range: [1, 10]}
+  gnrha_total_dose:   {name: "GnRHa 总用量", source: GnRha总用量, type: float, stage: during, range: [0.01, 10]}
+  gnrha_days:         {name: "GnRHa 总天数", source: GnRha总天数, type: int, stage: during, range: [1, 40]}
+  gn_days:            {name: "Gn 总天数", source: Gn总天数, type: int, stage: during, range: [1, 25]}
+  gn_total_dose:      {name: "Gn 总用量", source: Gn总用量, type: float, stage: during, range: [75, 10000]}
+
+# 由一列文字拆出的数值字段：按 separator 切开，第 index 段转成数值
+split_columns:
+  bp_systolic:        {name: "收缩压", source: 血压, separator: "/", index: 0, stage: baseline, range: [70, 220]}
+  bp_diastolic:       {name: "舒张压", source: 血压, separator: "/", index: 1, stage: baseline, range: [40, 140]}
+
+# 诊断是自由文本。每个类别给一组关键词，诊断里出现任何一个就记 1（一位患者可以有多个）。
+# 关键词表是按常见写法预设的，要对照统计报告里的“诊断高频词”和“未匹配比例”修订。
+diagnosis:
+  source: 诊断
+  stage: baseline
+  # 统计高频词时：先去掉括号里的内容（染色体核型等），再按这些分隔符和空白切开
+  separators: ["；", ";", "，", ",", "、"]
+  flags:
+    dx_primary:        [原发]
+    dx_secondary:      [继发]
+    # 不用"携带"做关键词：它会把"乙肝病毒携带者"也算进来；基因携带者已被"基因、地贫、易位"覆盖
+    dx_genetic:        [染色体, 易位, 倒位, 地贫, 地中海贫血, 单基因, 基因, 突变, 杂合, 连锁, 遗传病, PGT, PGD, PGS]
+    # 男方因素只按精液异常算；男方的染色体异常、地贫归入遗传学指征
+    dx_male:           [精子症, 精症, 少精, 弱精, 畸精, 畸形精子, 无精, 精子DNA碎片, 男方因素, 男性因素, 男性不育]
+    dx_recurrent_loss: [复发性流产, 反复流产, 反复自然流产, 习惯性流产]
+    dx_adverse_history: [不良孕产]
+    dx_tubal:          [输卵管, 盆腔粘连, 盆腔因素, 盆腔炎]
+    dx_uterine:        [瘢痕子宫, 疤痕子宫, 子宫肌瘤, 宫腔粘连, 子宫畸形, 纵隔, 内膜息肉]
+    dx_endometriosis:  [内膜异位, 内异, 巧克力囊肿, 巧囊, 腺肌, EMS]
+    dx_pcos:           [多囊, PCOS, PCO]
+    dx_dor:            [储备功能减退, 储备下降, 储备减退, 储备功能下降, 储备功能低下, DOR, 卵巢早衰, POI, 低反应]
+    dx_ovulation:      [排卵障碍, 稀发排卵, 无排卵]
+    dx_advanced_age:   [高龄]
+    dx_prior_failure:  [反复种植失败, 反复移植失败, IVF失败, 助孕失败]
+    dx_unexplained:    [不明原因, 原因不明]
+  # 有诊断、但上面一类都没匹配到的周期记为“其他”（少见诊断都落在这里）
+  other: dx_other
+  # 报告和文档里用的中文名
+  names:
+    dx_primary: 原发不孕
+    dx_secondary: 继发不孕
+    dx_genetic: 遗传学指征（染色体异常、地贫、单基因病等）
+    dx_male: 男方因素（精液异常）
+    dx_recurrent_loss: 复发性流产
+    dx_adverse_history: 不良孕产史
+    dx_tubal: 输卵管及盆腔因素
+    dx_uterine: 子宫因素（瘢痕子宫、肌瘤、宫腔粘连等）
+    dx_endometriosis: 子宫内膜异位症、腺肌症
+    dx_pcos: 多囊卵巢综合征
+    dx_dor: 卵巢储备功能减退
+    dx_ovulation: 排卵障碍
+    dx_advanced_age: 高龄
+    dx_prior_failure: 反复种植失败
+    dx_unexplained: 不明原因不孕
+    dx_other: 其他
+
+# 划分。没有患者编号，只能按周期划分（同一患者的多个周期可能落在不同集合，见报告中的提示）。
+# 每个周期的归属由 seed 和周期号的哈希决定，与行顺序无关；测试集一旦生成就固定（sealed/test_ids.txt），
+# 之后改配置或重跑都不会变。
+split:
+  seed: 42
+  test: 0.2
+  val: 0.1
+  stratify_by_label_bin: true
+  folds: 5                 # 每个周期另有一个固定的折号（cv_fold 列）：训练 agent 时，工具隐藏当前病例所在的折
+
+report:
+  min_count: 10          # 统计报告中，少于这个次数的取值不单独列出
+  top_tokens: 80         # 列出多少个诊断高频词
+  # 数据自检：这些字段对在临床上必然相关。如果它们之间相关、却都和获卵数无关，说明获卵数这一列和其他列没有对齐。
+  sanity_pairs:
+    - [weight_kg, bmi]
+    - [bp_systolic, bp_diastolic]
+    - [gn_days, gn_total_dose]
+    - [gn_start_dose, gn_total_dose]
+    - [age, amh]
+    - [age, fsh]
+    - [amh, afc_downreg]
+    - [amh, gn_start_dose]

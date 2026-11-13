@@ -1,0 +1,47 @@
+# 获卵数分组预测模型的配置：用哪些特征、标签怎么分组、每类特征怎么处理。
+# 字段名是 ovu/config/data.yaml 里统一后的名字。改特征或分组只改这个文件。
+
+label:
+  column: oocytes
+  # 分组的上界（含）。[3, 9, 15, 25] 表示 0–3、4–9、10–15、16–25、≥26。
+  # 不写 bins 时用 data.yaml 里的分组。
+  bins: [3, 9, 15, 25]
+
+# 允许进入模型的预测时点。启动前预测只用 baseline 和 plan；
+# 加上 during 就能用 Gn 总量、总天数等促排过程中的信息（另一种预测场景）。
+stages: [baseline, plan]
+
+features:
+  # 连续数值特征。
+  #   transform: standard（减均值除标准差）| log（先取 log(1+x) 再标准化，适合右偏的化验值）
+  #   缺失值用训练集中位数填补；missing_indicator 为 true 时另加一列“是否缺失”
+  numeric:
+    age:                {transform: standard}
+    bmi:                {transform: standard}
+    infertility_years:  {transform: log, missing_indicator: true}
+    fsh:                {transform: log}
+    lh:                 {transform: log}
+    prl:                {transform: log}
+    e2:                 {transform: log}
+    testosterone:       {transform: log}
+    amh:                {transform: log, missing_indicator: true}
+    afc_downreg:        {transform: standard, missing_indicator: true}
+    gn_start_dose:      {transform: standard}
+    gn_start_day:       {transform: standard}
+    gnrha_start_dose:   {transform: log}
+  # 类别特征：独热编码。训练集中少于 min_count 例的取值、没见过的取值和缺失都归入“其他”。
+  categorical:
+    protocol:           {min_count: 50}
+    gnrha_drug:         {min_count: 50}
+  # 0/1 特征（诊断类别），原样使用。
+  binary: [dx_primary, dx_secondary, dx_genetic, dx_male, dx_recurrent_loss, dx_adverse_history, dx_tubal,
+           dx_uterine, dx_endometriosis, dx_pcos, dx_dor, dx_ovulation, dx_advanced_age, dx_prior_failure, dx_other]
+
+model:
+  type: softmax          # 多分类逻辑回归；模型文件只含系数等汇总量，预测时只依赖 numpy
+  l2: 1.0                # L2 惩罚强度（作用在标准化后的系数上）
+  max_iterations: 3000
+
+explain:
+  permutation_repeats: 5   # 置换重要性：每个特征打乱几次取平均
+  seed: 42

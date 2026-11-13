@@ -1,0 +1,33 @@
+# 相似病例检索的配置：比对哪些临床特征、各自的权重。
+# 字段名是 ovu/config/data.yaml 里统一后的名字。改比对方式只改这个文件，然后重新运行 python -m ovu.similar.build。
+#
+# 距离 = 各特征距离的加权平均，只算查询里提供了的特征：
+#   数值特征：|查询值 − 病例值| ÷ scale，超过 cap 的按 cap 算
+#       scale: std 表示用训练集标准差；也可以直接写数字（如年龄写 3，表示相差 3 岁算 1 个单位）
+#       transform: log 表示先取 log(1+x) 再比较（适合 AMH 这类右偏的指标）
+#   类别特征和 0/1 特征：相同为 0，不同为 1
+#   查询提供了、但病例缺失的特征：按 missing_distance 计
+
+stages: [baseline, plan]       # 只允许用这些预测时点的特征检索
+
+features:
+  age:            {type: numeric, weight: 3, scale: 3}
+  amh:            {type: numeric, weight: 3, scale: std, transform: log}
+  afc_downreg:    {type: numeric, weight: 2, scale: std}
+  fsh:            {type: numeric, weight: 1, scale: std, transform: log}
+  bmi:            {type: numeric, weight: 1, scale: std}
+  gn_start_dose:  {type: numeric, weight: 1, scale: 75}
+  protocol:       {type: category, weight: 2}
+  dx_pcos:        {type: binary, weight: 1}
+  dx_dor:         {type: binary, weight: 1}
+  dx_endometriosis: {type: binary, weight: 0.5}
+
+cap: 3.0                 # 单个数值特征的距离上限，防止一个极端值主导
+missing_distance: 1.0    # 查询有值而病例缺失时的距离
+
+k_default: 50            # 默认返回最相似的多少例
+k_max: 200
+min_cohort: 15           # 可比病例少于这个数时不给统计
+max_listed: 10           # 最多列出多少位相似患者的明细
+# 列出相似患者时展示的字段（获卵数总是展示；不含任何编号）
+listed_fields: [age, amh, afc_downreg, protocol, gn_start_dose]

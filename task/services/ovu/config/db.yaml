@@ -1,0 +1,41 @@
+# 病例数据库工具的配置：agent 能查哪些列、数据概览里写什么、给哪些查询示例。
+# 改完后重新运行 python -m ovu.db.build（会把每条示例都实际执行一遍，写错的会报出来）。
+
+table: cases
+
+# 暴露给 agent 的列。写 all 表示 data.yaml 里的全部字段（含诊断类别），外加获卵数和分组。
+# 诊断原文（diagnosis_text）是自由文本，可能含个人细节，默认不暴露；周期号和折号永远不暴露。
+columns: all
+exclude: []
+
+# 列说明，只在需要比 data.yaml 的 name 多写几句时才填；没写的列用 data.yaml 里的 name。
+descriptions:
+  oocytes: 获卵数（本次促排取到的卵子总数）
+  oocytes_group: 获卵数分组
+  age: 女方年龄（岁）
+  amh: AMH
+  afc_downreg: 降调日当天窦卵泡数
+  protocol: 用药方案
+  gn_start_dose: 启动 Gn 用量
+  gn_total_dose: Gn 总用量（促排过程中才知道）
+  gn_days: Gn 总天数（促排过程中才知道）
+
+limits:
+  max_rows: 200          # 单次查询最多返回的行数
+  timeout_seconds: 2
+  min_group_size: 0      # 大于 0 时，在说明里提示 agent：少于这个例数的分组不可靠
+
+# 常用查询示例，通过接口提供给 agent。{table} 会替换成表名。
+examples:
+  - title: 获卵数分组的总体分布
+    sql: "SELECT oocytes_group, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY oocytes_group ORDER BY MIN(oocytes)"
+  - title: 按年龄段看获卵数
+    sql: "SELECT CASE WHEN age < 30 THEN '<30' WHEN age < 35 THEN '30-34' WHEN age < 38 THEN '35-37' WHEN age < 41 THEN '38-40' ELSE '>=41' END AS age_band, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY age_band ORDER BY MIN(age)"
+  - title: 与当前患者年龄和 AMH 相近的病例的获卵数分组（把数值换成当前患者的）
+    sql: "SELECT oocytes_group, COUNT(*) AS n FROM {table} WHERE age BETWEEN 33 AND 37 AND amh BETWEEN 1.0 AND 2.0 GROUP BY oocytes_group ORDER BY MIN(oocytes)"
+  - title: 各用药方案的例数和平均获卵数
+    sql: "SELECT protocol, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY protocol ORDER BY n DESC"
+  - title: 某个诊断类别有无时的获卵数对比
+    sql: "SELECT dx_pcos, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY dx_pcos"
+  - title: 某项指标缺失了多少
+    sql: "SELECT COUNT(*) AS n, SUM(amh IS NULL) AS amh_missing FROM {table}"
