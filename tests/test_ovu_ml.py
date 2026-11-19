@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -38,23 +40,23 @@ def prepared(tmp: Path, n: int = 3000) -> Path:
 class EncodingTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = yaml.safe_load(MODEL_CONFIG.read_text(encoding="utf-8"))
-        self.stages = cleaning.feature_stages(cleaning.load_config(DATA_CONFIG))
+        self.fields = cleaning.available_fields(cleaning.load_config(DATA_CONFIG))
 
-    def test_only_allowed_stages_enter_the_model(self) -> None:
+    def test_the_model_uses_exactly_the_listed_fields(self) -> None:
+        self.assertNotIn("gn_total_dose", selected_features(self.config, self.fields)["numeric"])      # not listed by default
         self.config["features"]["numeric"]["gn_total_dose"] = {"transform": "standard"}
-        self.assertNotIn("gn_total_dose", selected_features(self.config, self.stages)["numeric"])
-        self.config["stages"].append("during")
-        self.assertIn("gn_total_dose", selected_features(self.config, self.stages)["numeric"])
+        self.assertIn("gn_total_dose", selected_features(self.config, self.fields)["numeric"])
         self.config["features"]["binary"].append("no_such_field")      # removed from data.yaml: skipped, not an error
-        self.assertNotIn("no_such_field", selected_features(self.config, self.stages)["binary"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertNotIn("no_such_field", selected_features(self.config, self.fields)["binary"])
 
     def test_missing_unseen_and_rare_values(self) -> None:
-        config = {"stages": ["baseline", "plan"], "features": {
+        config = {"features": {
             "numeric": {"amh": {"transform": "log", "missing_indicator": True}, "age": {"transform": "standard"}},
             "categorical": {"protocol": {"min_count": 2}}, "binary": ["dx_pcos"]}}
         rows = [{"age": 30, "amh": 2.0, "protocol": "A", "dx_pcos": 1}, {"age": 40, "amh": "", "protocol": "A", "dx_pcos": 0},
                 {"age": 35, "amh": 4.0, "protocol": "B", "dx_pcos": 0}]
-        encoder = fit_encoder(rows, config, self.stages)
+        encoder = fit_encoder(rows, config, self.fields)
         self.assertEqual(encoder["categorical"]["protocol"]["levels"], ["A", "其他"])       # B is rare
         self.assertEqual([c["column"] for c in encoder["columns"]], ["amh", "amh（缺失）", "age", "protocol=A", "protocol=其他", "dx_pcos"])
         x = encode(rows + [{"age": None, "protocol": "never seen"}], encoder)
@@ -63,6 +65,14 @@ class EncodingTest(unittest.TestCase):
         self.assertEqual(x[:, 4].tolist(), [0, 0, 1, 1])                                  # rare and unseen -> 其他
         self.assertAlmostEqual(x[3, 2], (35 - 35) / np.std([30, 40, 35]))                 # missing age -> median
         self.assertEqual(json.loads(json.dumps(encoder)), encoder)                        # plain JSON
+
+    def test_rare_flags_are_left_out(self) -> None:
+        config = {"features": {"numeric": {"age": {}}, "binary": ["dx_pcos", "dx_tubal"], "binary_min_positive": 2}}
+        rows = [{"age": 30, "dx_pcos": 1, "dx_tubal": 1}, {"age": 31, "dx_pcos": 1, "dx_tubal": 0}, {"age": 32, "dx_pcos": 0, "dx_tubal": 0}]
+        with contextlib.redirect_stderr(io.StringIO()):
+            encoder = fit_encoder(rows, config, self.fields)
+        self.assertEqual(encoder["binary"], ["dx_pcos"])
+        self.assertEqual(encoder["binary_dropped"], {"dx_tubal": 1})
 
 
 class ModelTest(unittest.TestCase):
@@ -119,7 +129,7 @@ class TrainAndPredictTest(unittest.TestCase):
         self.assertEqual(list(by_name), list(Predictor(self.artifact).inputs))
         self.assertEqual(by_name["amh"]["kind"], "number")
         self.assertIn("拮抗剂方案", by_name["protocol"]["levels"])
-        self.assertEqual(by_name["dx_pcos"]["kind"], "binary")
+        self.assertEqual(by_name["dxg_ovulation"]["kind"], "binary")
 
     def test_fold_models_never_saw_their_fold(self) -> None:
         for fold in range(5):
@@ -142,6 +152,47 @@ class TrainAndPredictTest(unittest.TestCase):
             predictor.predict(gn_total_dose=3000)                                         # not a model input
         with self.assertRaises(ValueError):
             predictor.predict(age=None)
+
+    def test_l2_is_chosen_on_validation_and_folds_are_cross_validated(self) -> None:
+        setup = self.report["setup"]
+        self.assertEqual(len(setup["l2_search"]), 4)
+        self.assertEqual(setup["l2"], min(setup["l2_search"], key=lambda s: s["val_rps"])["l2"])
+        self.assertEqual(self.artifact["training"]["l2"], setup["l2"])
+        folds = self.report["cv"]["folds"]
+        self.assertEqual([f["fold"] for f in folds], [0, 1, 2, 3, 4])
+        self.assertEqual(sum(f["n_test"] for f in folds), setup["n_train"])
+        summary = self.report["cv"]["summary"]["model"]["rps"]
+        self.assertAlmostEqual(summary["mean"], np.mean([f["model"]["rps"] for f in folds]), places=4)
+        self.assertLess(summary["mean"], self.report["cv"]["summary"]["baseline"]["rps"]["mean"])
+        self.assertEqual(setup["titles"]["amh"], "AMH")
+
+    def test_partial_dependence_follows_the_simulated_relation(self) -> None:
+        dependence = self.report["partial_dependence"]
+        self.assertEqual(dependence["age"]["kind"], "numeric")
+        ages = dependence["age"]["expected_count"]
+        self.assertGreater(ages[0], ages[-1])                                              # older -> fewer oocytes
+        self.assertLess(dependence["amh"]["expected_count"][0], dependence["amh"]["expected_count"][-1])
+        self.assertEqual(dependence["protocol"]["kind"], "category")
+        for probs in dependence["protocol"]["group_probabilities"]:
+            self.assertAlmostEqual(sum(probs), 1.0, places=2)
+        calibration = self.report["val"]["calibration"]
+        self.assertAlmostEqual(sum(calibration["observed"]), 1.0, places=2)
+
+    def test_test_set_is_evaluated_once_unless_asked_again(self) -> None:
+        run = [sys.executable, "-m", "ovu.ml.evaluate_test", "--data", str(self.data)]
+        first = subprocess.run(run, cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        result = json.loads((self.data / "model" / "test_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["record"]["times_used"], 1)
+        self.assertLess(result["test"]["model"]["rps"], result["test"]["baseline"]["rps"])
+        second = subprocess.run(run, cwd=ROOT, capture_output=True, text=True)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("已经", second.stderr)
+        third = subprocess.run(run + ["--again"], cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(third.returncode, 0, third.stderr)
+        log = json.loads((self.data / "sealed" / "test_evaluations.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(log), 2)
+        self.assertNotIn("周期", json.dumps(log, ensure_ascii=False))                     # no patient data in the log
 
     def test_training_never_reads_the_sealed_test_set(self) -> None:
         source = (ROOT / "task" / "services" / "ovu" / "ml" / "train.py").read_text(encoding="utf-8")

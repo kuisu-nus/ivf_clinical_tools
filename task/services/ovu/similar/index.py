@@ -41,16 +41,13 @@ def _transform(values: np.ndarray, kind: str | None) -> np.ndarray:
 
 def resolve(config: dict[str, Any], rows: list[Row], data_config: dict[str, Any], bins: list[int], groups: list[str]) -> dict[str, Any]:
     """Check the config against the data config and replace ``scale: std`` by the training value."""
-    from ovu.pipeline.clean import feature_stages                   # offline only (needs pandas); queries never get here
-    stages, label = feature_stages(data_config), data_config["label"]["name"]
-    allowed = set(config["stages"])
+    from ovu.pipeline.clean import available_fields                 # offline only (needs pandas); queries never get here
+    available, label = available_fields(data_config), data_config["label"]["name"]
     features: dict[str, Any] = {}
     for name, spec in config["features"].items():
-        if name not in stages:                                       # removed from data.yaml: leave it out
+        if name not in available:                                    # removed from data.yaml: leave it out
             print(f"提示：similar.yaml 中的字段 {name} 不在 data.yaml 里，已跳过", file=sys.stderr)
             continue
-        if stages[name] not in allowed:
-            raise ValueError(f"{name} 的预测时点是 {stages[name]}，不在允许的 {sorted(allowed)} 中")
         if spec.get("type") not in KINDS or not float(spec.get("weight", 0)) > 0:
             raise ValueError(f"{name}：type 必须是 {KINDS} 之一，weight 必须大于 0")
         entry: dict[str, Any] = {"type": spec["type"], "weight": float(spec["weight"])}
@@ -64,7 +61,7 @@ def resolve(config: dict[str, Any], rows: list[Row], data_config: dict[str, Any]
         features[name] = entry
     if not features:
         raise ValueError("similar.yaml 中没有可用的比对特征")
-    listed = [f for f in config.get("listed_fields", []) if f in stages]
+    listed = [f for f in config.get("listed_fields", []) if f in available]
     levels = {name: sorted({str(r[name]) for r in rows if not is_missing(r.get(name))})
               for name, f in features.items() if f["type"] == "category"}
     return {"features": features, "inputs": describe(list(features), data_config, levels), "cap": float(config.get("cap", 3.0)), "missing_distance": float(config.get("missing_distance", 1.0)),

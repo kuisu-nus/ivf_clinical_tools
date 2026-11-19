@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
+os.environ.setdefault("OVU_DB_BACKEND", "sqlite")            # MySQL is tested separately (MySQLTest)
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "task" / "services"))
 sys.path.insert(0, str(ROOT / "tests"))
@@ -61,7 +62,7 @@ class ServiceTest(unittest.TestCase):
         self.assertIsNone(health["tool_info"]["ovu_similar_cases"]["hidden_fold"])
 
     def test_predict(self) -> None:
-        resp = self.post("ovu_predict_oocytes", {"age": 42, "amh": 0.6, "protocol": "拮抗剂方案", "dx_pcos": 0})
+        resp = self.post("ovu_predict_oocytes", {"age": 42, "amh": 0.6, "protocol": "拮抗剂方案", "dxg_ovulation": 0})
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
         self.assertAlmostEqual(sum(body["各分组概率"].values()), 1.0, places=2)
@@ -78,7 +79,7 @@ class ServiceTest(unittest.TestCase):
 
     def test_bad_arguments_get_a_readable_refusal(self) -> None:
         cases = [("ovu_predict_oocytes", {"age": 5}, 422), ("ovu_predict_oocytes", {"gn_total_dose": 3000}, 422),
-                 ("ovu_predict_oocytes", {"dx_pcos": 2}, 422), ("ovu_predict_oocytes", {}, 400),
+                 ("ovu_predict_oocytes", {"dxg_ovulation": 2}, 422), ("ovu_predict_oocytes", {}, 400),
                  ("ovu_similar_cases", {"age": 30, "k": 100000}, 422), ("ovu_similar_cases", {"k": 30}, 400),
                  ("ovu_case_sql", {"sql": "DELETE FROM cases"}, 400), ("ovu_data_overview", {"x": 1}, 422)]
         for tool, body, status in cases:
@@ -108,7 +109,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(list(specs["ovu_predict_oocytes"]["input_schema"]["properties"]), [i["name"] for i in model["inputs"]])
         similar = specs["ovu_similar_cases"]["input_schema"]["properties"]
         self.assertEqual(similar["age"]["minimum"], 18)
-        self.assertEqual(similar["dx_pcos"]["enum"], [0, 1])
+        self.assertEqual(similar["dxg_ovulation"]["enum"], [0, 1])
         self.assertIn("k", similar)
         self.assertNotIn("gn_total_dose", specs["ovu_predict_oocytes"]["input_schema"]["properties"])
         self.assertEqual(specs["ovu_data_overview"]["input_schema"]["properties"], {})

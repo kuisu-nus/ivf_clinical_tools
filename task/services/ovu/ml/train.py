@@ -4,17 +4,26 @@
                            [--data-config ovu/config/data.yaml] [--out outputs/ovu/model]
 
 Reads train.csv and val.csv written by ``python -m ovu.pipeline``; never opens
-the sealed test set. Writes to --out:
+the sealed test set (that is ``python -m ovu.ml.evaluate_test``, run once at the end).
+
+1. For each L2 strength in model.yaml, train on the training set and score on the
+   validation set; keep the strength with the lowest validation RPS.
+2. 5-fold cross-validation inside the training set: for each fold k, train without
+   fold k and score on fold k.
+3. Explain the final model: permutation importance on the validation set, the
+   per-column effect at the average patient, and partial dependence of each feature.
+
+Writes to --out:
     model.json          coefficients and encoding statistics only (no patient rows)
-    model_fold<k>.json  the same model trained without fold k (for agent training on training cases)
-    model_report.md     metrics on train / val against the "always predict the training
-    model_report.json   distribution" baseline, permutation importance, coefficients
+    model_fold<k>.json  the model trained without fold k (also used when training an agent on
+                        training cases: the tool answers with a model that never saw the case)
+    model_report.md     everything above, against the "always predict the training
+    model_report.json   distribution" baseline; aggregates only
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,115 +33,138 @@ import numpy as np
 import yaml
 
 from ovu.inputs import describe
-from ovu.ml.features import column_names, encode, feature_names, fit_encoder
-from ovu.ml.model import fit_softmax, metrics, softmax
+from ovu.ml.evaluation import (METRICS, coefficient_table, evaluate, feature_titles, labels, partial_dependence,
+                               permutation_importance, probabilities, read_rows, summarise_folds)
+from ovu.ml.features import encode, feature_names, fit_encoder
+from ovu.ml.model import fit_softmax
 from ovu.ml.predict import ARTIFACT_VERSION
-from ovu.pipeline.clean import bin_labels, feature_stages, load_config
+from ovu.pipeline.clean import available_fields, bin_labels, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_rows(path: str | Path) -> list[dict[str, Any]]:
-    with Path(path).open(encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
-
-
-def labels(rows: list[dict[str, Any]], column: str, bins: list[int]) -> tuple[np.ndarray, np.ndarray]:
-    counts = np.array([int(float(r[column])) for r in rows])
-    return counts, np.searchsorted(np.asarray(bins), counts, side="left")
-
-
-def train(train_rows: list[dict[str, Any]], config: dict[str, Any], data_config: dict[str, Any], bins: list[int]) -> dict[str, Any]:
-    stages = feature_stages(data_config)
+def train(train_rows: list[dict[str, Any]], config: dict[str, Any], data_config: dict[str, Any], bins: list[int],
+          l2: float | None = None) -> dict[str, Any]:
     counts, y = labels(train_rows, config["label"]["column"], bins)
     groups = bin_labels(bins)
     present = np.bincount(y, minlength=len(groups))
     if (present == 0).any():
         raise ValueError(f"训练集中这些分组没有病例：{[g for g, c in zip(groups, present) if c == 0]}")
-    encoder = fit_encoder(train_rows, config, stages)
+    encoder = fit_encoder(train_rows, config, available_fields(data_config))
     options = config.get("model", {})
-    weights, bias, fit = fit_softmax(encode(train_rows, encoder), y, len(groups), l2=float(options.get("l2", 1.0)),
+    if l2 is None:
+        l2 = l2_candidates(config)[0]
+    weights, bias, fit = fit_softmax(encode(train_rows, encoder), y, len(groups), l2=float(l2),
                                      max_iterations=int(options.get("max_iterations", 3000)))
     return {"artifact_version": ARTIFACT_VERSION, "model": "softmax", "label": config["label"]["column"], "bins": bins,
             "groups": groups, "group_means": [round(float(counts[y == k].mean()), 4) for k in range(len(groups))],
-            "group_share": [round(float(s), 4) for s in present / present.sum()],
-            "stages": list(config["stages"]), "encoder": encoder,
+            "group_share": [round(float(s), 4) for s in present / present.sum()], "encoder": encoder,
             "inputs": describe(feature_names(encoder), data_config, {n: c["levels"] for n, c in encoder["categorical"].items()}),
             "weights": weights.round(8).tolist(), "intercepts": bias.round(8).tolist(),
-            "training": {"n": len(train_rows), "l2": float(options.get("l2", 1.0)), **fit,
+            "training": {"n": len(train_rows), "l2": float(l2), **fit,
                          "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds")}}
 
 
+def l2_candidates(config: dict[str, Any]) -> list[float]:
+    value = config.get("model", {}).get("l2", 1.0)
+    return [float(v) for v in (value if isinstance(value, list) else [value])]
+
+
 def _probabilities(rows: list[dict[str, Any]], artifact: dict[str, Any]) -> np.ndarray:
-    return softmax(encode(rows, artifact["encoder"]) @ np.array(artifact["weights"]) + np.array(artifact["intercepts"]))
+    return probabilities(rows, artifact)
 
 
-def evaluate(rows: list[dict[str, Any]], artifact: dict[str, Any]) -> dict[str, Any]:
-    counts, y = labels(rows, artifact["label"], artifact["bins"])
-    means = np.array(artifact["group_means"])
-    baseline = np.tile(np.array(artifact["group_share"]), (len(rows), 1))
-    return {"model": metrics(_probabilities(rows, artifact), y, means, counts), "baseline": metrics(baseline, y, means, counts)}
+def run(train_rows: list[dict[str, Any]], val_rows: list[dict[str, Any]], config: dict[str, Any], data_config: dict[str, Any],
+        bins: list[int]) -> tuple[dict[str, Any], dict[int, dict[str, Any]], dict[str, Any]]:
+    """Train, choose L2 on the validation set, cross-validate and explain. Returns the final
+    model, the fold models and the report."""
+    search = []
+    for l2 in l2_candidates(config):
+        candidate = train(train_rows, config, data_config, bins, l2)
+        scored = evaluate(val_rows, candidate)["model"]
+        search.append({"l2": l2, "val_rps": scored["rps"], "val_log_loss": scored["log_loss"],
+                       "converged": candidate["training"]["converged"], "_artifact": candidate})
+    best = min(search, key=lambda s: s["val_rps"])
+    artifact = best["_artifact"]
+    for s in search:
+        del s["_artifact"]
+
+    fold_models, folds = {}, []
+    for fold in sorted({int(r["cv_fold"]) for r in train_rows if r.get("cv_fold", "") != ""}):
+        inside = [r for r in train_rows if r["cv_fold"] != str(fold)]
+        held_out = [r for r in train_rows if r["cv_fold"] == str(fold)]
+        part = train(inside, config, data_config, bins, best["l2"])
+        part["training"]["hidden_fold"] = fold
+        fold_models[fold] = part
+        scored = evaluate(held_out, part)
+        folds.append({"fold": fold, "n_train": len(inside), "n_test": len(held_out),
+                      "model": {k: v for k, v in scored["model"].items() if k != "confusion"},
+                      "baseline": {k: v for k, v in scored["baseline"].items() if k != "confusion"}})
+
+    explain = config.get("explain", {})
+    features = feature_names(artifact["encoder"])
+    report = {
+        "setup": {"model": "多分类逻辑回归（softmax），L2 正则", "groups": artifact["groups"], "bins": bins,
+                  "n_train": len(train_rows), "n_val": len(val_rows), "features": features,
+                  "titles": feature_titles(features + list(artifact["encoder"].get("binary_dropped") or {}), data_config), "encoder": artifact["encoder"],
+                  "l2_search": search, "l2": best["l2"], "iterations": artifact["training"]["iterations"],
+                  "converged": artifact["training"]["converged"]},
+        "train": evaluate(train_rows, artifact), "val": evaluate(val_rows, artifact),
+        "cv": {"folds": folds, "summary": summarise_folds(folds)} if folds else None,
+        "permutation_importance": permutation_importance(val_rows, artifact, int(explain.get("permutation_repeats", 5)),
+                                                         int(explain.get("seed", 42))),
+        "coefficients": coefficient_table(artifact),
+        "partial_dependence": partial_dependence(train_rows, artifact, int(explain.get("grid_points", 15))),
+    }
+    artifact["training"]["val"] = {k: v for k, v in report["val"]["model"].items() if k != "confusion"}
+    return artifact, fold_models, report
 
 
-def permutation_importance(rows: list[dict[str, Any]], artifact: dict[str, Any], repeats: int, seed: int) -> list[dict[str, Any]]:
-    """How much worse the model gets on ``rows`` when one feature's values are shuffled
-    between patients (all of its columns together). Larger = the model relies on it more."""
-    counts, y = labels(rows, artifact["label"], artifact["bins"])
-    means = np.array(artifact["group_means"])
-    x = encode(rows, artifact["encoder"])
-    weights, bias = np.array(artifact["weights"]), np.array(artifact["intercepts"])
-    base = metrics(softmax(x @ weights + bias), y, means, counts)
-    owner = [c["feature"] for c in column_names(artifact["encoder"])]
-    rng = np.random.default_rng(seed)
-    out = []
-    for feature in feature_names(artifact["encoder"]):
-        columns = [i for i, f in enumerate(owner) if f == feature]
-        deltas = {"rps": [], "log_loss": [], "mae_count": []}
-        for _ in range(repeats):
-            shuffled = x.copy()
-            shuffled[:, columns] = x[rng.permutation(len(x))][:, columns]
-            m = metrics(softmax(shuffled @ weights + bias), y, means, counts)
-            for key in deltas:
-                deltas[key].append(m[key] - base[key])
-        out.append({"feature": feature, **{f"{key}_increase": round(float(np.mean(v)), 5) for key, v in deltas.items()},
-                    "rps_increase_sd": round(float(np.std(deltas["rps"])), 5)})
-    return sorted(out, key=lambda item: -item["rps_increase"])
+def _metric_rows(columns: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    md = ["| 指标 | " + " | ".join(name for name, _ in columns) + " |", "|---|" + "---|" * len(columns)]
+    for key, (name, higher) in METRICS.items():
+        md.append(f"| {name}（{'越高越好' if higher else '越低越好'}） | " + " | ".join(
+            (f"{m[key]['mean']} ± {m[key]['sd']}" if isinstance(m.get(key), dict) else str(m.get(key, "—"))) for _, m in columns) + " |")
+    return md
 
 
-def coefficient_table(artifact: dict[str, Any]) -> list[dict[str, Any]]:
-    """Per column: the change in the expected count, at the average patient, for one
-    standard deviation more (numeric) or for having it (0/1 and category columns)."""
-    weights, bias, means = np.array(artifact["weights"]), np.array(artifact["intercepts"]), np.array(artifact["group_means"])
-    reference = float(softmax(bias[None, :])[0] @ means)
-    table = []
-    for i, column in enumerate(column_names(artifact["encoder"])):
-        shifted = float(softmax((weights[i] + bias)[None, :])[0] @ means)
-        table.append({**column, "expected_count_change": round(shifted - reference, 3)})
-    return sorted(table, key=lambda item: -abs(item["expected_count_change"]))
-
-
-def to_markdown(report: dict[str, Any], artifact: dict[str, Any]) -> str:
-    groups = artifact["groups"]
-    names = {"accuracy": "准确率", "within_one": "相邻组以内的准确率", "quadratic_kappa": "加权 kappa（二次）",
-             "rps": "RPS（越低越好）", "log_loss": "对数损失（越低越好）", "mae_count": "预期获卵数的平均绝对误差"}
-    md = ["# 获卵数分组模型报告", "", f"分组：{'、'.join(groups)}。使用的预测时点：{'、'.join(artifact['stages'])}。"
-          f"训练 {artifact['training']['n']} 例，迭代 {artifact['training']['iterations']} 次"
-          f"（{'已收敛' if artifact['training']['converged'] else '未收敛，可调大 max_iterations'}）。", "",
-          "基线 = 对每位患者都给出训练集的分组占比。测试集没有使用。", "",
-          "## 指标", "", "| 指标 | 训练集：模型 | 训练集：基线 | 验证集：模型 | 验证集：基线 |", "|---|---|---|---|---|"]
-    for key, name in names.items():
-        md.append(f"| {name} | " + " | ".join(str(report[part][who][key]) for part in ("train", "val") for who in ("model", "baseline")) + " |")
+def to_markdown(report: dict[str, Any]) -> str:
+    setup = report["setup"]
+    groups, titles = setup["groups"], setup["titles"]
+    md = ["# 获卵数分组模型报告", "",
+          f"模型：{setup['model']}。分组：{'、'.join(groups)}。训练 {setup['n_train']} 例，验证 {setup['n_val']} 例；"
+          f"L2 = {setup['l2']:g}（按验证集 RPS 选出），迭代 {setup['iterations']} 次"
+          f"（{'已收敛' if setup['converged'] else '未收敛，可调大 max_iterations'}）。", "",
+          "基线 = 对每位患者都给出训练集的分组占比。测试集没有使用（见 python -m ovu.ml.evaluate_test）。", "",
+          "## 特征", "", "、".join(f"{titles[f]}（{f}）" for f in setup["features"]), "",
+          *([f"训练集中为 1 的周期少于 {setup['encoder']['binary_min_positive']} 例、没有进入模型的 0/1 特征："
+             + "、".join(f"{titles.get(n, n)}（{n}，{c} 例）" for n, c in setup["encoder"]["binary_dropped"].items()), ""]
+            if setup["encoder"].get("binary_dropped") else []),
+          "## L2 选择（验证集）", "", "| L2 | 验证集 RPS | 验证集对数损失 | 收敛 |", "|---|---|---|---|"]
+    md += [f"| {s['l2']:g} | {s['val_rps']} | {s['val_log_loss']} | {'是' if s['converged'] else '否'} |" for s in setup["l2_search"]]
+    columns = [("训练集：模型", report["train"]["model"]), ("训练集：基线", report["train"]["baseline"]),
+               ("验证集：模型", report["val"]["model"]), ("验证集：基线", report["val"]["baseline"])]
+    if report.get("cv"):
+        columns += [("5 折交叉验证：模型", report["cv"]["summary"]["model"]), ("5 折交叉验证：基线", report["cv"]["summary"]["baseline"])]
+    md += ["", "## 指标", ""] + _metric_rows(columns)
     md += ["", "## 验证集混淆矩阵（行 = 真实分组，列 = 预测分组）", "", "| | " + " | ".join(groups) + " |", "|---|" + "---|" * len(groups)]
     md += [f"| {g} | " + " | ".join(str(c) for c in row) + " |" for g, row in zip(groups, report["val"]["model"]["confusion"])]
+    cal = report["val"]["calibration"]
+    md += ["", "## 验证集校准（各分组的平均预测概率 vs 实际占比）", "", "| 分组 | 平均预测概率 | 实际占比 |", "|---|---|---|"]
+    md += [f"| {g} | {p:.3f} | {o:.3f} |" for g, p, o in zip(groups, cal["predicted"], cal["observed"])]
     md += ["", "## 特征重要性（置换重要性，验证集）", "",
            "把某个特征在患者之间打乱后，模型变差多少。数值越大，模型越依赖这个特征；接近 0 或为负说明没有用上。", "",
            "| 特征 | RPS 上升 | ± | 对数损失上升 | 预期获卵数误差上升 |", "|---|---|---|---|---|"]
-    md += [f"| {i['feature']} | {i['rps_increase']:+.5f} | {i['rps_increase_sd']:.5f} | {i['log_loss_increase']:+.5f} | {i['mae_count_increase']:+.4f} |"
-           for i in report["permutation_importance"]]
+    md += [f"| {titles.get(i['feature'], i['feature'])} | {i['rps_increase']:+.5f} | {i['rps_increase_sd']:.5f} | "
+           f"{i['log_loss_increase']:+.5f} | {i['mae_count_increase']:+.4f} |" for i in report["permutation_importance"]]
     md += ["", "## 各列对预期获卵数的影响（模型系数）", "",
            "在平均患者的基础上：数值特征增加一个标准差，或 0/1、类别列取 1 时，预期获卵数的变化。是关联，不是因果。", "",
            "| 列 | 所属特征 | 预期获卵数变化 |", "|---|---|---|"]
-    md += [f"| {c['column']} | {c['feature']} | {c['expected_count_change']:+.3f} |" for c in report["coefficients"]]
+    md += [f"| {c['column']} | {titles.get(c['feature'], c['feature'])} | {c['expected_count_change']:+.3f} |" for c in report["coefficients"]]
+    md += ["", "## 部分依赖（其他输入不变，只改这一项时的平均预期获卵数）", ""]
+    for feature, pd_ in report["partial_dependence"].items():
+        pairs = "，".join(f"{v}: {e}" for v, e in zip(pd_["values"], pd_["expected_count"]))
+        md.append(f"- {titles.get(feature, feature)}：{pairs}")
     return "\n".join(md) + "\n"
 
 
@@ -150,28 +182,20 @@ def main() -> None:
     data_dir, out_dir = Path(args.data), Path(args.out or Path(args.data) / "model")
     train_rows, val_rows = read_rows(data_dir / "train.csv"), read_rows(data_dir / "val.csv")
 
-    artifact = train(train_rows, config, data_config, bins)
-    explain = config.get("explain", {})
-    report = {"train": evaluate(train_rows, artifact), "val": evaluate(val_rows, artifact),
-              "permutation_importance": permutation_importance(val_rows, artifact, int(explain.get("permutation_repeats", 5)),
-                                                               int(explain.get("seed", 42))),
-              "coefficients": coefficient_table(artifact)}
-    artifact["training"]["val"] = {k: v for k, v in report["val"]["model"].items() if k != "confusion"}
+    artifact, fold_models, report = run(train_rows, val_rows, config, data_config, bins)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "model.json").write_text(json.dumps(artifact, ensure_ascii=False), encoding="utf-8")
-    # One model per fold, trained without that fold: when an agent is trained on a training case,
-    # the tool answers with the model that never saw the case (and its fold).
-    folds = sorted({r["cv_fold"] for r in train_rows if r.get("cv_fold", "") != ""})
-    for fold in folds:
-        part = train([r for r in train_rows if r["cv_fold"] != fold], config, data_config, bins)
-        part["training"]["hidden_fold"] = int(fold)
+    for fold, part in fold_models.items():
         (out_dir / f"model_fold{fold}.json").write_text(json.dumps(part, ensure_ascii=False), encoding="utf-8")
     (out_dir / "model_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-    (out_dir / "model_report.md").write_text(to_markdown(report, artifact), encoding="utf-8")
+    (out_dir / "model_report.md").write_text(to_markdown(report), encoding="utf-8")
     v = report["val"]
-    print(f"训练 {len(train_rows)} 例，验证 {len(val_rows)} 例；验证集 RPS {v['model']['rps']}（基线 {v['baseline']['rps']}），"
-          f"加权 kappa {v['model']['quadratic_kappa']}")
-    print(f"模型：{out_dir / 'model.json'}（另有 {len(folds)} 个分折模型）；报告：{out_dir / 'model_report.md'}")
+    print(f"训练 {len(train_rows)} 例，验证 {len(val_rows)} 例；L2 = {report['setup']['l2']:g}；"
+          f"验证集 RPS {v['model']['rps']}（基线 {v['baseline']['rps']}），加权 kappa {v['model']['quadratic_kappa']}")
+    if report["cv"]:
+        cv = report["cv"]["summary"]["model"]["rps"]
+        print(f"{len(fold_models)} 折交叉验证 RPS {cv['mean']} ± {cv['sd']}")
+    print(f"模型：{out_dir / 'model.json'}（另有 {len(fold_models)} 个分折模型）；报告：{out_dir / 'model_report.md'}")
 
 
 if __name__ == "__main__":

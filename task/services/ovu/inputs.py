@@ -38,6 +38,9 @@ def flag_description(name: str, data_config: dict[str, Any]) -> str | None:
     if name in diagnosis.get("flags", {}):
         keywords = "、".join(diagnosis["flags"][name][:3])
         return f"{title + '：' if title else ''}诊断中含“{keywords}”等关键词（1 是，0 否）"
+    if name in (diagnosis.get("groups") or {}):
+        members = "、".join(diagnosis.get("names", {}).get(m, m).split("（")[0] for m in diagnosis["groups"][name])
+        return f"{title + '：' if title else ''}属于{members}中任一项（1 是，0 否）"
     if name == diagnosis.get("other"):
         return f"{title or '其他'}：有诊断但不属于任何已定义的类别（1 是，0 否）"
     return None

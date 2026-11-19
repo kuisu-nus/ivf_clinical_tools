@@ -8,8 +8,6 @@
 #   类别特征和 0/1 特征：相同为 0，不同为 1
 #   查询提供了、但病例缺失的特征：按 missing_distance 计
 
-stages: [baseline, plan]       # 只允许用这些预测时点的特征检索
-
 features:
   age:            {type: numeric, weight: 3, scale: 3}
   amh:            {type: numeric, weight: 3, scale: std, transform: log}
@@ -18,9 +16,9 @@ features:
   bmi:            {type: numeric, weight: 1, scale: std}
   gn_start_dose:  {type: numeric, weight: 1, scale: 75}
   protocol:       {type: category, weight: 2}
-  dx_pcos:        {type: binary, weight: 1}
-  dx_dor:         {type: binary, weight: 1}
-  dx_endometriosis: {type: binary, weight: 0.5}
+  dxg_ovulation:  {type: binary, weight: 1}
+  dxg_dor:        {type: binary, weight: 1}
+  dxg_endometriosis: {type: binary, weight: 0.5}
 
 cap: 3.0                 # 单个数值特征的距离上限，防止一个极端值主导
 missing_distance: 1.0    # 查询有值而病例缺失时的距离

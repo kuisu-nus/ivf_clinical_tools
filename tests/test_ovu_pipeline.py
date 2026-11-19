@@ -86,6 +86,38 @@ class CleaningTest(unittest.TestCase):
         self.assertEqual((int(data.loc[0, "dx_male"]), int(data.loc[0, "dx_genetic"]), int(data.loc[0, "dx_other"])), (0, 1, 0))
         self.assertEqual((int(data.loc[1, "dx_male"]), int(data.loc[1, "dx_genetic"])), (1, 1))
 
+    def test_added_factor_categories_and_ambiguous_keywords(self) -> None:
+        texts = ["继发不孕；高泌乳素血症；薄型子宫内膜", "原发不孕 男方HIV感染（人类免疫缺陷病毒）", "原发不孕 抗磷脂综合征",
+                 "男方乙肝病毒携带者 逆行射精", "生育力保存", "女方染色体46XXt"]
+        for i, text in enumerate(texts):
+            self.raw.loc[i, "诊断"] = text
+        data, _ = cleaning.clean(self.raw, self.config)
+        flag = lambda i, name: int(data.loc[i, name])
+        self.assertEqual((flag(0, "dx_endocrine"), flag(0, "dx_endometrium"), flag(0, "dx_other")), (1, 1, 0))
+        self.assertEqual((flag(1, "dx_infection"), flag(1, "dx_immune")), (1, 0))          # HIV is not an immune factor
+        self.assertEqual(flag(2, "dx_immune"), 1)
+        self.assertEqual((flag(3, "dx_infection"), flag(3, "dx_sexual"), flag(3, "dx_genetic"), flag(3, "dx_male")), (1, 1, 0, 0))
+        self.assertEqual((flag(4, "dx_nonmedical"), flag(4, "dx_other")), (1, 0))
+        self.assertEqual(flag(5, "dx_genetic"), 1)
+
+    def test_groups_are_the_or_of_their_details(self) -> None:
+        data, _ = cleaning.clean(self.raw, self.config)
+        for group, members in self.config["diagnosis"]["groups"].items():
+            self.assertTrue((data[group] == data[members].max(axis=1)).all(), group)
+        self.assertTrue((data["dxg_ovulation"] >= data["dx_pcos"]).all())
+        self.assertIn("dxg_uterine", cleaning.available_fields(self.config))
+
+    def test_words_no_keyword_covers_are_listed(self) -> None:
+        self.raw["诊断"] = "继发不孕；罕见病甲"
+        self.raw.loc[0, "诊断"] = "继发不孕；罕见病乙"
+        data, log = cleaning.clean(self.raw, self.config)
+        d = stats.build_report(data, split.assign(data, self.config), self.config, log)["diagnosis"]
+        self.assertEqual(d["unmatched"], 0)                       # every cycle matched 继发, so nothing went to 其他
+        self.assertEqual(d["cycles_with_uncovered"], len(data))   # but the rare words are counted here
+        self.assertEqual(d["distinct_uncovered"], 2)
+        self.assertEqual(d["top_uncovered"], {})                  # each seen in one distinct text only: below the minimum
+        self.assertIn("未被任何关键词覆盖的诊断词", stats.to_markdown(stats.build_report(data, split.assign(data, self.config), self.config, log)))
+
     def test_removing_a_field_from_the_config_removes_it_everywhere(self) -> None:
         import contextlib, io
         from ovu.db.database import CaseDatabase, resolve as resolve_db
@@ -98,13 +130,13 @@ class CleaningTest(unittest.TestCase):
         del self.config["split_columns"]["bp_systolic"]
         data, _ = cleaning.clean(self.raw, self.config)
         self.assertFalse({"bmi", "protocol", "bp_systolic"} & set(data.columns))
-        stages = cleaning.feature_stages(self.config)
+        fields = cleaning.available_fields(self.config)
         rows = data.drop(columns=[c for c in data.columns if c.startswith("_")]).assign(cv_fold=0).astype(object).to_dict("records")
         with contextlib.redirect_stderr(io.StringIO()) as notices:
-            chosen = selected_features(yaml.safe_load((folder / "model.yaml").read_text(encoding="utf-8")), stages)
+            chosen = selected_features(yaml.safe_load((folder / "model.yaml").read_text(encoding="utf-8")), fields)
             similar = resolve_similar(yaml.safe_load((folder / "similar.yaml").read_text(encoding="utf-8")), rows, self.config,
                                       [3, 9, 15, 25], cleaning.bin_labels([3, 9, 15, 25]))
-            database = resolve_db(yaml.safe_load((folder / "db.yaml").read_text(encoding="utf-8")), self.config, stages,
+            database = resolve_db(yaml.safe_load((folder / "db.yaml").read_text(encoding="utf-8")), self.config, fields,
                                   cleaning.bin_labels([3, 9, 15, 25]), [3, 9, 15, 25])
         self.assertNotIn("bmi", chosen["numeric"])
         self.assertNotIn("protocol", chosen["categorical"])
@@ -118,11 +150,9 @@ class CleaningTest(unittest.TestCase):
         values = pd.Series([0, 3, 4, 9, 10, 25, 26, 60])
         self.assertEqual(list(cleaning.bin_index(values, [3, 9, 15, 25])), [0, 0, 1, 1, 2, 3, 4, 4])
 
-    def test_every_field_has_a_stage(self) -> None:
-        stages = cleaning.feature_stages(self.config)
-        self.assertEqual(stages["gn_total_dose"], "during")
-        self.assertEqual(stages["gn_start_dose"], "plan")
-        self.assertEqual(stages["dx_pcos"], "baseline")
+    def test_available_fields_cover_columns_split_columns_and_flags(self) -> None:
+        fields = cleaning.available_fields(self.config)
+        self.assertTrue({"gn_total_dose", "gn_start_dose", "bp_systolic", "dx_pcos", "dx_other"} <= set(fields))
 
 
 class SplitTest(unittest.TestCase):
@@ -169,7 +199,7 @@ class SplitTest(unittest.TestCase):
         self.assertEqual(sum(age["counts"]), len(self.data))
         self.assertEqual(len(age["edges"]), len(age["counts"]) + 1)
         self.assertEqual(sum(report["diagnosis"]["factors_per_cycle"].values()), len(self.data))
-        self.assertEqual(report["fields"]["dx_male"]["title"], "男方因素（精液异常）")
+        self.assertEqual(report["fields"]["dx_male"]["title"], "男方因素（精液、睾丸、精索异常）")
         self.assertEqual({(i["a"], i["b"]) for i in report["sanity"]["order"]},
                          {("_row", "oocytes"), ("_row", "age"), ("_id_number", "oocytes"), ("_id_number", "age")})
         for key in self.data["_key"].head(20):

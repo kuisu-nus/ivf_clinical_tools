@@ -45,7 +45,9 @@ class PopulationReportTest(unittest.TestCase):
             for heading in ("研究人群与数据清洗", "年龄分布", "获卵数分布", "基础情况与内分泌指标", "用药方案与用药情况", "不孕因素与诊断"):
                 self.assertIn(heading, body)
             self.assertIn(f"{report['rows']['rows_clean']:,}", body)
-            self.assertIn("男方因素（精液异常）", body)
+            self.assertIn("男方因素（精液、睾丸、精索异常）", body)
+            self.assertIn("关键词表的覆盖情况", body)
+            self.assertIn("top_uncovered", report["diagnosis"])
             self.assertGreaterEqual(len(images), 5)
             self.assertGreaterEqual(body.count("<w:tbl>"), 8)
             bands = age_bands(report["fields"]["age"]["histogram"])
@@ -63,6 +65,35 @@ class PopulationReportTest(unittest.TestCase):
                 body = archive.read("word/document.xml").decode("utf-8")
             self.assertIn("卵泡刺激素", body)
             self.assertIn("新增指标", body)
+
+    def test_model_document_before_and_after_the_test_set(self) -> None:
+        from test_ovu_ml import prepared
+        with TemporaryDirectory() as tmp:
+            data = prepared(Path(tmp), 2000)
+            subprocess.run([sys.executable, "-m", "ovu.ml.train", "--data", str(data)], cwd=ROOT, check=True, capture_output=True)
+            document = data / "model" / "模型性能与可解释分析.docx"
+            for evaluate_first, wording in ((False, "测试集尚未评估"), (True, "测试集只评估一次")):
+                if evaluate_first:
+                    subprocess.run([sys.executable, "-m", "ovu.ml.evaluate_test", "--data", str(data)], cwd=ROOT, check=True, capture_output=True)
+                done = subprocess.run([sys.executable, "-m", "ovu.report.model", "--model-dir", str(data / "model")],
+                                      cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                with zipfile.ZipFile(document) as archive:
+                    body = archive.read("word/document.xml").decode("utf-8")
+                    images = [n for n in archive.namelist() if n.startswith("word/media/")]
+                self.assertIn(wording, body)
+                for heading in ("模型与数据", "模型性能", "可解释分析", "5 折交叉验证", "置换重要性", "部分依赖"):
+                    self.assertIn(heading, body)
+                self.assertIn("用药方案：", body)                                         # readable input names
+                self.assertGreaterEqual(len(images), 3)
+            # retrained after the test evaluation: the old test numbers belong to another model and are not used
+            model = data / "model" / "model.json"
+            model.write_text(model.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            done = subprocess.run([sys.executable, "-m", "ovu.report.model", "--model-dir", str(data / "model")],
+                                  cwd=ROOT, capture_output=True, text=True)
+            self.assertIn("旧模型的测试结果", done.stdout)
+            with zipfile.ZipFile(document) as archive:
+                self.assertIn("当前模型尚未在测试集上评估", archive.read("word/document.xml").decode("utf-8"))
 
 
 if __name__ == "__main__":

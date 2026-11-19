@@ -224,11 +224,17 @@ def age_bands(histogram: dict[str, Any]) -> list[tuple[str, int]]:
                        if (low is None or age >= low) and (high is None or age <= high))) for low, high, name in AGE_BANDS]
 
 
-def _table_fields(report: dict[str, Any], preferred: tuple[tuple[str, str], ...], stages: tuple[str, ...]) -> list[tuple[str, str]]:
-    """The preferred fields in their order, then any other numeric field of these stages that data.yaml added."""
+def _group(field: dict[str, Any]) -> str:
+    if "group" in field:
+        return field["group"]
+    return "medication" if field.get("stage") in ("plan", "during") else "clinical"     # report.json from before groups
+
+
+def _table_fields(report: dict[str, Any], preferred: tuple[tuple[str, str], ...], group: str) -> list[tuple[str, str]]:
+    """The preferred fields in their order, then any other numeric field of this group that data.yaml added."""
     listed = {n for group in (BASELINE, MEDICATION) for n, _ in group} | set(SHOWN_ELSEWHERE)
     extra = [(n, f.get("title") or n) for n, f in report["fields"].items()
-             if n not in listed and f.get("stage") in stages and "summary" in f]
+             if n not in listed and _group(f) == group and "summary" in f]
     return list(preferred) + extra
 
 
@@ -287,7 +293,7 @@ def build(report: dict[str, Any], cjk: bool) -> Document:
 
     b.heading("四、基础情况与内分泌指标")
     b.text("各指标以中位数和四分位数描述。AMH 和降调日窦卵泡数的缺失比例较高，使用时需要注意。")
-    b.table("基础情况与内分泌指标", ["指标", "有效例数", "中位数（P25–P75）", "P5–P95", "缺失率"], _summary_rows(report, _table_fields(report, BASELINE, ("baseline",))),
+    b.table("基础情况与内分泌指标", ["指标", "有效例数", "中位数（P25–P75）", "P5–P95", "缺失率"], _summary_rows(report, _table_fields(report, BASELINE, "clinical")),
             [3.6, 2.0, 4.8, 3.2, 2.2], "数据文件未提供化验指标的单位，表中不标注单位。")
     if "infertility_years" in fields:
         b.figure("不孕年限分布" + b.TAILS, histogram_figure(fields["infertility_years"]["histogram"], label("不孕年限（年）", "Years of infertility"),
@@ -303,7 +309,7 @@ def build(report: dict[str, Any], cjk: bool) -> Document:
         b.table("用药方案构成", ["用药方案", "周期数", "占比"], [[k, _n(v), _pct(v / known)] for k, v in top], [5.0, 3.0, 3.0])
         b.figure("用药方案构成", bar_figure(list(counts) if cjk else [f"Protocol {i + 1}" for i in range(len(counts))],
                                          [v / known for v in counts.values()], label("占全部周期的比例", "Share of cycles")))
-    b.table("促排用药情况", ["指标", "有效例数", "中位数（P25–P75）", "P5–P95", "缺失率"], _summary_rows(report, _table_fields(report, MEDICATION, ("plan", "during"))),
+    b.table("促排用药情况", ["指标", "有效例数", "中位数（P25–P75）", "P5–P95", "缺失率"], _summary_rows(report, _table_fields(report, MEDICATION, "medication")),
             [4.4, 2.0, 4.8, 2.8, 1.8], "数据文件未提供用量的单位，表中不标注单位。")
     if "gnrha_drug" in fields:
         counts = {k: v for k, v in fields["gnrha_drug"]["counts"].items() if not k.startswith("（")}
@@ -315,20 +321,49 @@ def build(report: dict[str, Any], cjk: bool) -> Document:
     if flags:
         d = report["diagnosis"]
         b.heading("六、不孕因素与诊断")
-        b.text(f"诊断为自由文本，共 {_n(d['distinct_texts'])} 种不同写法。按关键词把同义写法归并为 {len(flags)} 个类别"
-               "（如“瘢痕子宫”与“疤痕子宫”归为同一类），一个周期可以同时属于多个类别；"
-               f"没有匹配到任何已定义类别的 {_n(d['unmatched'])} 个周期（{_pct(d['unmatched'] / total)}）归入“其他”。"
-               "男方因素只统计精液异常，男方的染色体异常和地贫归入遗传学指征。")
-        b.table("不孕因素与诊断类别构成", ["类别", "周期数", "占比"],
-                [[f["title"], _n(f["positive"]), _pct(f["positive_rate"])] for _, f in flags], [8.0, 2.6, 2.6],
-                "一个周期可属于多个类别，占比之和大于 100%。")
-        shown = [(n, f) for n, f in flags if f["positive"] > 0]
-        b.figure("不孕因素与诊断类别构成", bar_figure([f["title"].split("（")[0] if cjk else n for n, f in shown],
-                                               [f["positive_rate"] for _, f in shown], label("占全部周期的比例", "Share of cycles")))
+        grouped = [(n, f) for n, f in flags if f.get("level") == "group"]
+        details = [(n, f) for n, f in flags if f.get("level") != "group"]
+        main = grouped + [(n, f) for n, f in details if not f.get("in_group")] if grouped else details
+        main = sorted(main, key=lambda kv: -kv[1]["positive"])
+        titles = {n: f["title"] for n, f in flags}
+        b.text(f"诊断为自由文本，共 {_n(d['distinct_texts'])} 种不同写法。先按关键词把同义写法归并为 {len(details)} 个细类"
+               "（如“瘢痕子宫”与“疤痕子宫”归为同一类），"
+               f"没有匹配到任何细类的 {_n(d['unmatched'])} 个周期（{_pct(d['unmatched'] / total)}）归入“其他”"
+               + (f"；再把细类合并为 {len(grouped)} 个病因大类，命中大类中任一细类即记为该大类。" if grouped else "。")
+               + "一个周期可以同时属于多个类别。男方的染色体异常和地贫归入遗传学指征；传染病不是不孕原因，归入合并症及其他。")
+        if grouped:
+            b.table("不孕类型与病因大类构成", ["类别", "包含的细类", "周期数", "占比"],
+                    [[f["title"], "、".join(titles.get(m, m).split("（")[0] for m in f.get("members", [])) or "—",
+                      _n(f["positive"]), _pct(f["positive_rate"])] for _, f in main], [4.6, 5.4, 2.2, 2.0],
+                    "一个周期可属于多个类别，占比之和大于 100%。")
+        else:
+            b.table("不孕因素与诊断类别构成", ["类别", "周期数", "占比"],
+                    [[f["title"], _n(f["positive"]), _pct(f["positive_rate"])] for _, f in main], [8.0, 2.6, 2.6],
+                    "一个周期可属于多个类别，占比之和大于 100%。")
+        shown = [(n, f) for n, f in (grouped or main) if f["positive"] > 0]
+        figure_title = "病因大类构成" if grouped else "不孕因素与诊断类别构成"
+        b.figure(figure_title, bar_figure([f["title"].split("（")[0] if cjk else n for n, f in shown],
+                                          [f["positive_rate"] for _, f in shown], label("占全部周期的比例", "Share of cycles")))
         per = d.get("factors_per_cycle")
         if per:
-            b.table("每个周期的不孕因素数目", ["因素数目", "周期数", "占比"], [[k, _n(v), _pct(v / total)] for k, v in per.items()],
-                    [4.0, 3.5, 3.5], "不含“原发不孕”“继发不孕”这两个分类。")
+            b.table("每个周期的病因大类数目" if grouped else "每个周期的不孕因素数目", ["数目", "周期数", "占比"],
+                    [[k, _n(v), _pct(v / total)] for k, v in per.items()], [4.0, 3.5, 3.5],
+                    "只数病因大类。" if grouped else "不含“原发不孕”“继发不孕”这两个分类。")
+        if grouped:
+            b.table("附表：细类构成", ["细类", "所属大类", "周期数", "占比"],
+                    [[f["title"], titles.get(f.get("in_group"), "—").split("（")[0] if f.get("in_group") else "—（单独使用）",
+                      _n(f["positive"]), _pct(f["positive_rate"])] for _, f in sorted(details, key=lambda kv: -kv[1]["positive"])],
+                    [5.6, 4.4, 2.2, 2.0], "细类用于核对关键词；模型和病例库默认使用大类。")
+        missed = d.get("top_uncovered")
+        if missed is not None:
+            b.text(f"关键词表的覆盖情况：诊断切成词以后，有 {_n(d['distinct_uncovered'])} 种词不含任何类别的关键词，"
+                   f"{_n(d['cycles_with_uncovered'])} 个周期（{_pct(d['cycles_with_uncovered'] / total)}）的诊断里至少有一个这样的词。"
+                   "这些周期多数已经命中了别的类别，所以不会进“其他”，但这几个词的信息只留在诊断原文里。"
+                   "下表列出最常见的这类词，用来补充 data.yaml 里的关键词。")
+            if missed:
+                shown_missed = list(missed.items())[:40]
+                b.table("未被关键词覆盖的诊断词", ["诊断词", "出现次数"], [[t, _n(c)] for t, c in shown_missed], [8.0, 3.0],
+                        f"每种诊断写法只计一次；只列出现 ≥ {d['uncovered_min_count']} 次的前 {len(shown_missed)} 个。")
 
     b.heading("七、数据处理说明" if flags else "六、数据处理说明")
     zero_fields = [(fields[n]["source"], fields[n]["cleaning"].get("zero_as_missing", 0)) for n in fields

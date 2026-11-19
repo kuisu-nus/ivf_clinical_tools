@@ -80,21 +80,17 @@ class DistanceTest(unittest.TestCase):
 class ConfigTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
-        self.stages = cleaning.feature_stages(cleaning.load_config(DATA_CONFIG))
 
-    def test_std_scale_comes_from_training_and_stages_are_enforced(self) -> None:
+    def test_std_scale_comes_from_training(self) -> None:
         data_config = cleaning.load_config(DATA_CONFIG)
         rows = [{"age": 30, "amh": 1.0, "protocol": "A", "oocytes": 5}, {"age": 40, "amh": 3.0, "protocol": "B", "oocytes": 9}]
-        config = {"stages": ["baseline", "plan"], "features": {"age": {"type": "numeric", "weight": 1, "scale": "std"},
+        config = {"features": {"age": {"type": "numeric", "weight": 1, "scale": "std"},
                                                                "protocol": {"type": "category", "weight": 1}}}
         spec = resolve(config, rows, data_config, [3, 9], ["0–3", "4–9", "≥10"])
         self.assertEqual(spec["features"]["age"]["scale"], 5.0)
         by_name = {i["name"]: i for i in spec["inputs"]}
         self.assertEqual((by_name["age"]["kind"], by_name["age"]["minimum"], by_name["age"]["maximum"]), ("integer", 18, 55))
         self.assertEqual(by_name["protocol"]["levels"], ["A", "B"])
-        config["features"]["gn_total_dose"] = {"type": "numeric", "weight": 1}
-        with self.assertRaises(ValueError):                                 # a during-stimulation field
-            resolve(config, rows, data_config, [3, 9], [])
         config["features"] = {"nope": {"type": "numeric", "weight": 1}, "age": {"type": "numeric", "weight": 1}}
         self.assertEqual(list(resolve(config, rows, data_config, [3, 9], [])["features"]), ["age"])   # unknown field skipped
 

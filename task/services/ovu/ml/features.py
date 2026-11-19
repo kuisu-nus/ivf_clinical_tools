@@ -42,25 +42,34 @@ def _transform(values: np.ndarray, kind: str) -> np.ndarray:
     raise ValueError(f"transform 必须是 standard 或 log，不是 {kind}")
 
 
-def selected_features(config: dict[str, Any], stages: dict[str, str]) -> dict[str, list[str]]:
-    """The configured features whose stage is allowed, by kind. A field that is not in the data
-    config (removed there, so no longer loaded) is left out with a notice."""
+_NOTICED: set[str] = set()
+
+
+def selected_features(config: dict[str, Any], available: list[str]) -> dict[str, list[str]]:
+    """The features listed in model.yaml, by kind. A field that is not in the data config
+    (removed there, so no longer loaded) is left out with a notice."""
     spec = config["features"]
-    allowed = set(config["stages"])
     chosen: dict[str, list[str]] = {}
     for kind in ("numeric", "categorical", "binary"):
         names = list(spec.get(kind) or [])
-        unknown = [n for n in names if n not in stages]
+        unknown = [n for n in names if n not in available]
         if unknown:
             print(f"提示：model.yaml 中这些字段不在 data.yaml 里，已跳过：{unknown}", file=sys.stderr)
-        chosen[kind] = [n for n in names if n in stages and stages[n] in allowed]
+        chosen[kind] = [n for n in names if n in available]
     return chosen
 
 
-def fit_encoder(rows: list[Row], config: dict[str, Any], stages: dict[str, str]) -> dict[str, Any]:
-    chosen = selected_features(config, stages)
+def fit_encoder(rows: list[Row], config: dict[str, Any], available: list[str]) -> dict[str, Any]:
+    chosen = selected_features(config, available)
     spec = config["features"]
-    encoder: dict[str, Any] = {"numeric": {}, "categorical": {}, "binary": chosen["binary"]}
+    least = int(spec.get("binary_min_positive", 0) or 0)
+    positives = {name: sum(1 for r in rows if not is_missing(r.get(name)) and float(r[name]) == 1) for name in chosen["binary"]}
+    dropped = {name: n for name, n in positives.items() if n < least}
+    if dropped and repr(dropped.keys()) not in _NOTICED:          # once per run, not once per L2 candidate and fold
+        _NOTICED.add(repr(dropped.keys()))
+        print(f"提示：这些 0/1 特征在训练集中为 1 的周期少于 {least} 例，不进模型：{dropped}", file=sys.stderr)
+    encoder: dict[str, Any] = {"numeric": {}, "categorical": {}, "binary": [n for n in chosen["binary"] if n not in dropped],
+                               "binary_dropped": dropped, "binary_min_positive": least}
     for name in chosen["numeric"]:
         options = spec["numeric"][name] or {}
         kind = options.get("transform", "standard")

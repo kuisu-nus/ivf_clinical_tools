@@ -16,9 +16,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ovu.pipeline.clean import bin_labels, feature_stages
+from ovu.pipeline.clean import available_fields, bin_labels, diagnosis_groups
 
-STAGE_NAMES = {"baseline": "进周期前", "plan": "启动方案", "during": "促排过程中"}
+GROUP_NAMES = {"clinical": "基础情况", "medication": "用药", "diagnosis": "诊断"}
 AGE_BANDS = [(0, 29, "<30"), (30, 34, "30–34"), (35, 37, "35–37"), (38, 40, "38–40"), (41, 99, "≥41")]
 
 
@@ -100,13 +100,12 @@ def build_report(data: pd.DataFrame, parts: pd.Series, config: dict[str, Any], l
                        "value_count": {str(k): int(c) for k, c in counts.items() if c >= min_count},
                        "value_count_hidden": int(counts[counts < min_count].sum())}
 
-    stages = feature_stages(config)
     specs = {**config.get("columns", {}), **config.get("split_columns", {})}
     report["fields"] = {}
-    for name, stage in stages.items():
+    for name in available_fields(config):
         spec = specs.get(name, {})
         kind = spec.get("type", "flag" if name not in specs else "float")
-        entry: dict[str, Any] = {"source": spec.get("source", config.get("diagnosis", {}).get("source")), "stage": stage,
+        entry: dict[str, Any] = {"source": spec.get("source", config.get("diagnosis", {}).get("source")), "group": spec.get("group", "clinical" if name in specs else "diagnosis"),
                                  "type": kind, "missing_rate": _r(data[name].isna().mean(), 4),
                                  "cleaning": log["fields"].get(name, {}), "note": spec.get("note", "")}
         if spec.get("name"):
@@ -116,6 +115,12 @@ def build_report(data: pd.DataFrame, parts: pd.Series, config: dict[str, Any], l
             entry["label_by_value"] = _label_by_group(train, train[name], label, len(names), min_count)
         elif kind == "flag":
             entry["title"] = (config.get("diagnosis") or {}).get("names", {}).get(name, name)
+            groups = diagnosis_groups(config)
+            entry["level"] = "group" if name in groups else "detail"
+            if name in groups:
+                entry["members"] = list(groups[name])
+            else:
+                entry["in_group"] = next((g for g, members in groups.items() if name in members), None)
             entry["positive"] = int(data[name].sum())
             entry["positive_rate"] = _r(data[name].mean(), 4)
             entry["label_by_value"] = _label_by_group(train, train[name], label, len(names), min_count)
@@ -145,20 +150,36 @@ def build_report(data: pd.DataFrame, parts: pd.Series, config: dict[str, Any], l
     diagnosis = config.get("diagnosis")
     if diagnosis:
         splitter = "|".join([r"\s+"] + [re.escape(s) for s in diagnosis["separators"]])
+        keywords = [k.upper() for words in diagnosis["flags"].values() for k in words]
         tokens: Counter[str] = Counter()
-        for text in data["diagnosis_text"].drop_duplicates():       # one count per distinct diagnosis, not per cycle
-            text = re.sub(r"[(（][^()（）]*[)）]", " ", text)           # karyotypes etc. inside brackets
+        uncovered: Counter[str] = Counter()
+        texts_with_uncovered = set()
+        for original in data["diagnosis_text"].drop_duplicates():   # one count per distinct diagnosis, not per cycle
+            text = re.sub(r"[(（][^()（）]*[)）]", " ", original)       # karyotypes etc. inside brackets
             text = re.sub(r"[(（][^()（）]*[)）]", " ", text)           # one level of nesting
-            tokens.update({t.strip() for t in re.split(splitter, text) if len(t.strip()) > 1})
-        top = config.get("report", {}).get("top_tokens", 80)
-        specific = [f for f in diagnosis["flags"] if f not in ("dx_primary", "dx_secondary")]
+            words = {t.strip() for t in re.split(splitter, text) if len(t.strip()) > 1}
+            tokens.update(words)
+            missed = {w for w in words if not any(k in w.upper() for k in keywords)}
+            uncovered.update(missed)
+            if missed:
+                texts_with_uncovered.add(original)
+        settings = config.get("report", {})
+        top = settings.get("top_tokens", 80)
+        top_uncovered, uncovered_min = settings.get("top_uncovered", 80), settings.get("uncovered_min_count", 3)
+        specific = list(diagnosis.get("groups") or {}) or [f for f in diagnosis["flags"] if f not in ("dx_primary", "dx_secondary")]
         per_cycle = data[specific].sum(axis=1).clip(upper=5).value_counts().sort_index()
         report["diagnosis"] = {"empty": log["diagnosis_empty"], "unmatched": log["diagnosis_unmatched"],
                                "factors_per_cycle": {("≥5" if k == 5 else str(int(k))): int(c) for k, c in per_cycle.items()},
                                "unmatched_rate": _r(log["diagnosis_unmatched"] / max(log["rows_raw"], 1), 4),
                                "distinct_tokens": len(tokens), "distinct_texts": int(data["diagnosis_text"].nunique()),
                                "repeated_text_rows": int(data["diagnosis_text"].duplicated(keep=False).sum()),
-                               "top_tokens": {t: c for t, c in tokens.most_common(top) if c >= min_count}}
+                               "top_tokens": {t: c for t, c in tokens.most_common(top) if c >= min_count},
+                               # words no keyword covers: a cycle keeps them only in the free text, so they show what
+                               # the keyword table still misses (also in cycles that matched another category)
+                               "cycles_with_uncovered": int(data["diagnosis_text"].isin(texts_with_uncovered).sum()),
+                               "distinct_uncovered": len(uncovered),
+                               "uncovered_min_count": uncovered_min,
+                               "top_uncovered": {t: c for t, c in uncovered.most_common(top_uncovered) if c >= uncovered_min}}
     return report
 
 
@@ -203,7 +224,7 @@ def to_markdown(report: dict[str, Any]) -> str:
            + (f"；其余取值合计 {lab['value_count_hidden']} 例" if lab["value_count_hidden"] else "")]
 
     md += ["", "## 数值字段", "",
-           "| 字段 | 原始列 | 时点 | 缺失率 | 中位数（P25–P75） | P5–P95 | 与获卵数的 Spearman 相关 | 清洗 | 备注 |",
+           "| 字段 | 原始列 | 类别 | 缺失率 | 中位数（P25–P75） | P5–P95 | 与获卵数的 Spearman 相关 | 清洗 | 备注 |",
            "|---|---|---|---|---|---|---|---|---|"]
     numeric = {k: f for k, f in report["fields"].items() if "summary" in f}
     for name, f in sorted(numeric.items(), key=lambda kv: -abs(kv[1]["spearman_with_label"] or 0)):
@@ -213,12 +234,12 @@ def to_markdown(report: dict[str, Any]) -> str:
                            if f["cleaning"].get(key))
         dist = f"{s['median']}（{s['p25']}–{s['p75']}）| {s['p5']}–{s['p95']}" if s["n"] else "— | —"
         rho = "—" if f["spearman_with_label"] is None else f"{f['spearman_with_label']:+.3f}"
-        md.append(f"| {name} | {f['source']} | {STAGE_NAMES[f['stage']]} | {f['missing_rate']:.1%} | {dist} | {rho} | {changed} | {f['note']} |")
+        md.append(f"| {name} | {f['source']} | {GROUP_NAMES[f['group']]} | {f['missing_rate']:.1%} | {dist} | {rho} | {changed} | {f['note']} |")
 
     for name, f in report["fields"].items():
         if f["type"] != "category":
             continue
-        md += ["", f"## {name}（{f['source']}，{STAGE_NAMES[f['stage']]}）", "",
+        md += ["", f"## {name}（{f['source']}，{GROUP_NAMES[f['group']]}）", "",
                f"缺失率 {f['missing_rate']:.1%}。例数为全部数据，获卵数为训练集。", "",
                "| 取值 | 例数 | 训练集例数 | 平均获卵数 | 中位数 | " + " | ".join(names) + " |", "|---|---|---|---|---|" + "---|" * len(names)]
         for value, count in f["counts"].items():
@@ -236,14 +257,23 @@ def to_markdown(report: dict[str, Any]) -> str:
     if flags:
         d = report["diagnosis"]
         md += ["", "## 诊断类别", "",
-               f"诊断为空 {d['empty']} 例；有诊断但没有匹配到任何类别 {d['unmatched']} 例（{d['unmatched_rate']:.1%}）。"
-               "一位患者可以属于多个类别。", "",
-               "| 类别 | 例数 | 占比 | 训练集：有 / 无该诊断的平均获卵数 |", "|---|---|---|---|"]
-        for name, f in sorted(flags.items(), key=lambda kv: -kv[1]["positive"]):
-            g = f["label_by_value"]
-            pair = f"{g['1']['mean']} / {g['0']['mean']}" if "1" in g and "0" in g else "—"
-            md.append(f"| {f['title']}（{name}） | {f['positive']} | {f['positive_rate']:.1%} | {pair} |")
+               f"诊断为空 {d['empty']} 例；有诊断但没有匹配到任何细类 {d['unmatched']} 例（{d['unmatched_rate']:.1%}）。"
+               "一位患者可以属于多个类别。大类是若干细类的“或”。"]
+        main = {k: f for k, f in flags.items() if f.get("level") == "group" or not f.get("in_group")}
+        details = {k: f for k, f in flags.items() if f.get("level") != "group"}
+        tables = [("大类（及没归进大类的细类）", main), ("细类", details)] if any(f.get("level") == "group" for f in flags.values()) \
+            else [("类别", details)]
+        for heading, shown in tables:
+            md += ["", f"### {heading}", "", "| 类别 | 例数 | 占比 | 训练集：有 / 无该诊断的平均获卵数 |", "|---|---|---|---|"]
+            for name, f in sorted(shown.items(), key=lambda kv: -kv[1]["positive"]):
+                g = f["label_by_value"]
+                pair = f"{g['1']['mean']} / {g['0']['mean']}" if "1" in g and "0" in g else "—"
+                md.append(f"| {f['title']}（{name}） | {f['positive']} | {f['positive_rate']:.1%} | {pair} |")
         md += ["", f"诊断共 {d['distinct_texts']} 种不同写法；{d['repeated_text_rows']} 个周期的诊断与别的周期完全相同（可能是同一患者的多个周期）。",
                "", f"诊断高频词（去掉括号内容后按空白和分隔符切开，每种诊断写法只计一次，共 {d['distinct_tokens']} 种；用来修订关键词表）：", "",
                "，".join(f"{t.replace('|', '/')}: {c}" for t, c in d["top_tokens"].items())]
+        if "top_uncovered" in d:
+            md += ["", f"未被任何关键词覆盖的诊断词（共 {d['distinct_uncovered']} 种；{d['cycles_with_uncovered']} 个周期的诊断里至少有一个这样的词，"
+                   f"其中包括已经命中别的类别的周期；只列出现 ≥ {d['uncovered_min_count']} 次的）：", "",
+                   "，".join(f"{t.replace('|', '/')}: {c}" for t, c in d["top_uncovered"].items()) or "（无）"]
     return "\n".join(md) + "\n"

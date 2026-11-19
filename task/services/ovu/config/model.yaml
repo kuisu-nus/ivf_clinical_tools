@@ -1,5 +1,8 @@
 # 获卵数分组预测模型的配置：用哪些特征、标签怎么分组、每类特征怎么处理。
 # 字段名是 ovu/config/data.yaml 里统一后的名字。改特征或分组只改这个文件。
+# 下面列了哪个字段，模型就用哪个；没列的不用。
+# Gn 总用量、Gn 总天数、GnRHa 总用量、GnRHa 总天数默认没列：它们是促排结束后的累计量，
+# 出方案时还不知道。要用的话在 numeric 下加一行，例如 gn_total_dose: {transform: standard}。
 
 label:
   column: oocytes
@@ -7,9 +10,6 @@ label:
   # 不写 bins 时用 data.yaml 里的分组。
   bins: [3, 9, 15, 25]
 
-# 允许进入模型的预测时点。启动前预测只用 baseline 和 plan；
-# 加上 during 就能用 Gn 总量、总天数等促排过程中的信息（另一种预测场景）。
-stages: [baseline, plan]
 
 features:
   # 连续数值特征。
@@ -33,15 +33,21 @@ features:
   categorical:
     protocol:           {min_count: 50}
     gnrha_drug:         {min_count: 50}
-  # 0/1 特征（诊断类别），原样使用。
-  binary: [dx_primary, dx_secondary, dx_genetic, dx_male, dx_recurrent_loss, dx_adverse_history, dx_tubal,
-           dx_uterine, dx_endometriosis, dx_pcos, dx_dor, dx_ovulation, dx_advanced_age, dx_prior_failure, dx_other]
+  # 0/1 特征，原样使用：不孕类型（原发、继发）和 10 个病因大类（大类由哪些细类组成见 data.yaml 的 diagnosis.groups）。
+  # 高龄不单列：女方年龄已是数值特征。想用细类（dx_ 开头）时直接写在这里，可与大类混用。
+  binary: [dx_primary, dx_secondary, dxg_ovulation, dxg_dor, dxg_tubal, dxg_uterine, dxg_endometriosis,
+           dxg_male, dxg_genetic, dxg_adverse, dxg_unexplained, dxg_other]
+  # 训练集中为 1 的周期少于这个数的 0/1 特征不进模型（太少，系数估不准），报告里会列出被去掉的特征和例数。
+  binary_min_positive: 20
 
 model:
   type: softmax          # 多分类逻辑回归；模型文件只含系数等汇总量，预测时只依赖 numpy
-  l2: 1.0                # L2 惩罚强度（作用在标准化后的系数上）
+  # L2 惩罚强度（作用在标准化后的系数上）。写一个数就用这个数；写一组数就逐个在训练集上训练、
+  # 在验证集上比 RPS，取最好的那个。
+  l2: [0.1, 1, 10, 100]
   max_iterations: 3000
 
 explain:
   permutation_repeats: 5   # 置换重要性：每个特征打乱几次取平均
   seed: 42
+  grid_points: 15          # 部分依赖：数值特征在 P5–P95 之间取多少个点

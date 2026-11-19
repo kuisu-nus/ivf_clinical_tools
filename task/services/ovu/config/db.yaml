@@ -3,10 +3,22 @@
 
 table: cases
 
+# mysql：工具查 MySQL（建库、建表、导入由 python -m ovu.db.build 完成，连接信息见 ovu/db/mysql.py 里的环境变量）
+# sqlite：不需要数据库服务，工具启动时把 train.csv 读进内存（测试和离线检查用）
+# 环境变量 OVU_DB_BACKEND 可以临时覆盖这里的设置。
+backend: sqlite         # 服务器上暂时没有 MySQL；接上后改成 mysql，再跑一次 python -m ovu.db.build
+mysql:
+  database: ovu          # 视图库名：ovu（全部训练病例）、ovu_f0…ovu_f4（各去掉一折）；底表在 ovu_base
+  reader: ovu_reader     # 工具用的只读账号：ovu_reader、ovu_reader_f0…ovu_reader_f4，各自只能读自己的视图库
+  reader_host: "%"       # 只读账号允许从哪些主机连接
+
 # 暴露给 agent 的列。写 all 表示 data.yaml 里的全部字段（含诊断类别），外加获卵数和分组。
+# 列类型由 data.yaml 的 type 决定：int → INT，float → DOUBLE，category → VARCHAR，诊断类别 → TINYINT。
 # 诊断原文（diagnosis_text）是自由文本，可能含个人细节，默认不暴露；周期号和折号永远不暴露。
 columns: all
 exclude: []
+# 诊断类别暴露到哪一级：groups 只给大类（加上没归进大类的细类：原发、继发、高龄），details 只给细类，both 都给。
+diagnosis_level: groups
 
 # 列说明，只在需要比 data.yaml 的 name 多写几句时才填；没写的列用 data.yaml 里的 name。
 descriptions:
@@ -36,6 +48,6 @@ examples:
   - title: 各用药方案的例数和平均获卵数
     sql: "SELECT protocol, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY protocol ORDER BY n DESC"
   - title: 某个诊断类别有无时的获卵数对比
-    sql: "SELECT dx_pcos, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY dx_pcos"
+    sql: "SELECT dxg_ovulation, COUNT(*) AS n, ROUND(AVG(oocytes), 1) AS mean_oocytes FROM {table} GROUP BY dxg_ovulation"
   - title: 某项指标缺失了多少
     sql: "SELECT COUNT(*) AS n, SUM(amh IS NULL) AS amh_missing FROM {table}"

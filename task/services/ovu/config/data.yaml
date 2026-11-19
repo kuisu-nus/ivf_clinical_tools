@@ -5,8 +5,7 @@
 #   name              中文名，统计报告、Word 文档和数据库列说明都用它
 #   source            原始列名
 #   type              int | float | category
-#   stage             预测时点。baseline = 进周期前已知；plan = 启动时确定的方案；
-#                     during = 促排过程中才知道（启动前预测时不能用）
+#   group             在人群统计文档里放进哪张表：clinical 基础情况（默认，可不写）| medication 用药
 #   range             [下限, 上限]，超出的值记为缺失（不删行）
 #   zero_is_missing   true 时 0 记为缺失（化验值不可能为 0）
 #   min_count         类别字段：出现次数少于它的取值并入“其他”
@@ -24,84 +23,130 @@ label:
   bins: [3, 9, 15, 25]
 
 columns:
-  age:                {name: "女方年龄（岁）", source: 女方年龄, type: int, stage: baseline, range: [18, 55]}
-  infertility_years:  {name: "不孕年限（年）", source: 不孕年限, type: float, stage: baseline, range: [0, 30],
+  age:                {name: "女方年龄（岁）", source: 女方年龄, type: int, range: [18, 55]}
+  infertility_years:  {name: "不孕年限（年）", source: 不孕年限, type: float, range: [0, 30],
                        note: "0 占 28%，含义待确认（不足 1 年，还是未填）"}
-  height_cm:          {name: "身高（cm）", source: 身高(cm), type: float, stage: baseline, range: [130, 190]}
-  weight_kg:          {name: "体重（kg）", source: 体重(kg), type: float, stage: baseline, range: [30, 130]}
-  bmi:                {name: "体重指数（BMI）", source: 体重指数, type: float, stage: baseline, range: [13, 50]}
-  pulse:              {name: "脉搏", source: 脉搏, type: float, stage: baseline, range: [40, 140]}
-  fsh:                {name: "FSH", source: 内分泌FSH, type: float, stage: baseline, range: [0.1, 100], zero_is_missing: true}
-  lh:                 {name: "LH", source: 内分泌LH, type: float, stage: baseline, range: [0.05, 100], zero_is_missing: true}
-  prl:                {name: "PRL", source: 内分泌PRL, type: float, stage: baseline, range: [0.5, 500], zero_is_missing: true}
-  e2:                 {name: "E2", source: 内分泌E2, type: float, stage: baseline, range: [1, 1000], zero_is_missing: true,
+  height_cm:          {name: "身高（cm）", source: 身高(cm), type: float, range: [130, 190]}
+  weight_kg:          {name: "体重（kg）", source: 体重(kg), type: float, range: [30, 130]}
+  bmi:                {name: "体重指数（BMI）", source: 体重指数, type: float, range: [13, 50]}
+  pulse:              {name: "脉搏", source: 脉搏, type: float, range: [40, 140]}
+  fsh:                {name: "FSH", source: 内分泌FSH, type: float, range: [0.1, 100], zero_is_missing: true}
+  lh:                 {name: "LH", source: 内分泌LH, type: float, range: [0.05, 100], zero_is_missing: true}
+  prl:                {name: "PRL", source: 内分泌PRL, type: float, range: [0.5, 500], zero_is_missing: true}
+  e2:                 {name: "E2", source: 内分泌E2, type: float, range: [1, 1000], zero_is_missing: true,
                        note: "单位待确认（pg/mL 或 pmol/L）"}
-  testosterone:       {name: "T", source: 内分泌T, type: float, stage: baseline, range: [0.01, 10], zero_is_missing: true,
+  testosterone:       {name: "T", source: 内分泌T, type: float, range: [0.01, 10], zero_is_missing: true,
                        note: "单位待确认；P99.9 为 25.6，疑似混有两种单位"}
-  amh:                {name: "AMH", source: AMH, type: float, stage: baseline, range: [0.01, 30], zero_is_missing: true,
+  amh:                {name: "AMH", source: AMH, type: float, range: [0.01, 30], zero_is_missing: true,
                        note: "缺失 43%"}
-  afc_downreg:        {name: "降调日窦卵泡数", source: 降调日当天窦卵泡数, type: float, stage: baseline, range: [1, 60], zero_is_missing: true,
+  afc_downreg:        {name: "降调日窦卵泡数", source: 降调日当天窦卵泡数, type: float, range: [1, 60], zero_is_missing: true,
                        note: "0 占 52%，按未记录处理；是否只有降调方案才记录，待确认"}
-  protocol:           {name: "用药方案", source: 用药方案明细, type: category, stage: plan, min_count: 50}
-  gnrha_drug:         {name: "GnRH 类药物", source: GnRha开始用药, type: category, stage: plan, min_count: 50,
+  protocol:           {name: "用药方案", source: 用药方案明细, type: category, group: medication, min_count: 50}
+  gnrha_drug:         {name: "GnRH 类药物", source: GnRha开始用药, type: category, group: medication, min_count: 50,
                        replace: {"加尼瑞克（晴乐）": 加尼瑞克, "尼瑞克": 加尼瑞克, "金磊针（曲普瑞林）": 曲普瑞林}}
-  gnrha_start_dose:   {name: "GnRHa 开始量", source: GnRha开始量, type: float, stage: plan, range: [0.01, 5]}
-  gn_start_dose:      {name: "启动 Gn 用量", source: 启动Gn用量, type: float, stage: plan, range: [25, 600]}
-  gn_start_day:       {name: "启动 Gn 时机（周期第几天）", source: 启动Gn时机, type: int, stage: plan, range: [1, 10]}
-  gnrha_total_dose:   {name: "GnRHa 总用量", source: GnRha总用量, type: float, stage: during, range: [0.01, 10]}
-  gnrha_days:         {name: "GnRHa 总天数", source: GnRha总天数, type: int, stage: during, range: [1, 40]}
-  gn_days:            {name: "Gn 总天数", source: Gn总天数, type: int, stage: during, range: [1, 25]}
-  gn_total_dose:      {name: "Gn 总用量", source: Gn总用量, type: float, stage: during, range: [75, 10000]}
+  gnrha_start_dose:   {name: "GnRHa 开始量", source: GnRha开始量, type: float, group: medication, range: [0.01, 5]}
+  gn_start_dose:      {name: "启动 Gn 用量", source: 启动Gn用量, type: float, group: medication, range: [25, 600]}
+  gn_start_day:       {name: "启动 Gn 时机（周期第几天）", source: 启动Gn时机, type: int, group: medication, range: [1, 10]}
+  gnrha_total_dose:   {name: "GnRHa 总用量", source: GnRha总用量, type: float, group: medication, range: [0.01, 10]}
+  gnrha_days:         {name: "GnRHa 总天数", source: GnRha总天数, type: int, group: medication, range: [1, 40]}
+  gn_days:            {name: "Gn 总天数", source: Gn总天数, type: int, group: medication, range: [1, 25]}
+  gn_total_dose:      {name: "Gn 总用量", source: Gn总用量, type: float, group: medication, range: [75, 10000]}
 
 # 由一列文字拆出的数值字段：按 separator 切开，第 index 段转成数值
 split_columns:
-  bp_systolic:        {name: "收缩压", source: 血压, separator: "/", index: 0, stage: baseline, range: [70, 220]}
-  bp_diastolic:       {name: "舒张压", source: 血压, separator: "/", index: 1, stage: baseline, range: [40, 140]}
+  bp_systolic:        {name: "收缩压", source: 血压, separator: "/", index: 0, range: [70, 220]}
+  bp_diastolic:       {name: "舒张压", source: 血压, separator: "/", index: 1, range: [40, 140]}
 
 # 诊断是自由文本。每个类别给一组关键词，诊断里出现任何一个就记 1（一位患者可以有多个）。
 # 关键词表是按常见写法预设的，要对照统计报告里的“诊断高频词”和“未匹配比例”修订。
 diagnosis:
   source: 诊断
-  stage: baseline
   # 统计高频词时：先去掉括号里的内容（染色体核型等），再按这些分隔符和空白切开
   separators: ["；", ";", "，", ",", "、"]
   flags:
     dx_primary:        [原发]
     dx_secondary:      [继发]
     # 不用"携带"做关键词：它会把"乙肝病毒携带者"也算进来；基因携带者已被"基因、地贫、易位"覆盖
-    dx_genetic:        [染色体, 易位, 倒位, 地贫, 地中海贫血, 单基因, 基因, 突变, 杂合, 连锁, 遗传病, PGT, PGD, PGS]
-    # 男方因素只按精液异常算；男方的染色体异常、地贫归入遗传学指征
-    dx_male:           [精子症, 精症, 少精, 弱精, 畸精, 畸形精子, 无精, 精子DNA碎片, 男方因素, 男性因素, 男性不育]
-    dx_recurrent_loss: [复发性流产, 反复流产, 反复自然流产, 习惯性流产]
-    dx_adverse_history: [不良孕产]
-    dx_tubal:          [输卵管, 盆腔粘连, 盆腔因素, 盆腔炎]
-    dx_uterine:        [瘢痕子宫, 疤痕子宫, 子宫肌瘤, 宫腔粘连, 子宫畸形, 纵隔, 内膜息肉]
-    dx_endometriosis:  [内膜异位, 内异, 巧克力囊肿, 巧囊, 腺肌, EMS]
+    # inv、der 是核型里倒位、衍生染色体的写法，XXT、XYT 是"46,XX,t(...)"这类易位核型；α、β 是地贫写法里括号前的部分；克氏征即 47,XXY
+    dx_genetic:        [染色体, 核型, 易位, 倒位, INV, DER, XXT, XYT, XXX, DIC, INS, 嵌合, "XX,T", "XY,T", "XX，T", "XY，T", 地贫, 地中海贫血, α, β, 单基因, 基因, 突变, 杂合, 纯合, 半合子, 外显子, 内含子, EXON, INTRON, 连锁, 遗传,
+                        DMD, 肌营养不良, 肌萎缩, 软骨发育, SOTOS, 患儿, 家族,
+                        克氏, 克兰费尔特, 微缺失, HBH, G6PD, 血友病, HLA, PGT, PGD, PGS]
+    # 男方因素只按精液和睾丸、精索异常算；男方的染色体异常、地贫归入遗传学指征，性功能问题另列一类
+    dx_male:           [精子症, 精症, 少精, 弱精, 畸精, 畸形精子, 无精, 死精, 隐匿精子, 精液不液化, 精液异常, 精子DNA碎片, 顶体, 输精管,
+                        精索静脉曲张, 隐睾, 睾丸, 男方因素, 男性因素, 男性不育]
+    dx_sexual:         [性功能障碍, 勃起功能障碍, 阳痿, 射精障碍, 不射精, 逆行射精, 早泄, 性交困难, 性交障碍, 阴道痉挛]
+    dx_recurrent_loss: [复发性流产, 复发流产, 反复流产, 反复自然流产, 习惯性流产, 妊娠丢失, RSA]
+    dx_adverse_history: [不良孕产, 不良孕史, 不良妊娠, 流产史, 胎停, 稽留流产, 死胎, 胎儿畸形, 出生缺陷]
+    dx_tubal:          [输卵管, 盆腔粘连, 盆腔黏连, 盆腔因素, 盆腔炎, 异位妊娠, 宫外孕, 生殖器结核, 盆腔结核]
+    dx_uterine:        [瘢痕子宫, 疤痕子宫, 子宫肌瘤, 宫腔粘连, 宫腔黏连, 子宫畸形, 纵隔, 单角子宫, 双角子宫, 双子宫, 鞍状子宫, 幼稚子宫,
+                        子宫发育不良, 内膜息肉, 内膜增生]
+    dx_endometrium:    [薄型子宫内膜, 薄型内膜, 内膜薄, 子宫内膜炎, 内膜炎, 内膜容受]
+    dx_cervical:       [宫颈]
+    dx_endometriosis:  [内膜异位, 内异, 巧克力, 巧囊, 腺肌, EMS]
     dx_pcos:           [多囊, PCOS, PCO]
-    dx_dor:            [储备功能减退, 储备下降, 储备减退, 储备功能下降, 储备功能低下, DOR, 卵巢早衰, POI, 低反应]
-    dx_ovulation:      [排卵障碍, 稀发排卵, 无排卵]
+    dx_dor:            [储备功能减退, 储备下降, 储备减退, 储备功能下降, 储备功能低下, DOR, 卵巢早衰, POF, POI,
+                        卵巢功能不全, 卵巢功能减退, 卵巢功能低下, 低反应]
+    dx_ovulation:      [排卵障碍, 稀发排卵, 无排卵, 低促, 下丘脑]
+    dx_endocrine:      [泌乳素, 催乳素, 高PRL, 垂体, 甲状腺功能, 甲功, 甲亢, 甲减, 桥本, 糖尿病, 糖耐量, 胰岛素抵抗, 超重, 肥胖, 高雄, 肾上腺, 库欣]
+    # 不用单独的"免疫"：它会把"人类免疫缺陷病毒"（HIV）也算进来
+    dx_immune:         [抗磷脂, APS, 抗体阳性, 免疫性, 自身免疫, 狼疮, SLE, 干燥综合征, 风湿, 易栓, 血栓前]
+    # 传染病不是不孕原因，但会影响实验室操作和方案，单列一类，避免落进其他类别
+    dx_infection:      [乙肝, 乙型肝炎, HBV, 丙肝, 丙型肝炎, HCV, HIV, 艾滋, 人类免疫缺陷, 梅毒]
     dx_advanced_age:   [高龄]
-    dx_prior_failure:  [反复种植失败, 反复移植失败, IVF失败, 助孕失败]
+    dx_prior_failure:  [种植失败, 移植失败, IVF失败, 助孕失败, 人工授精失败, AIH失败, IUI失败]
     dx_unexplained:    [不明原因, 原因不明]
-  # 有诊断、但上面一类都没匹配到的周期记为“其他”（少见诊断都落在这里）
+    # 不因疾病而助孕：生育力保存、供精、供卵
+    dx_nonmedical:     [生育力保存, 冻卵, 卵子冷冻, 供精, 供卵, 赠卵]
+  # 有诊断、但上面一类都没匹配到的周期记为“其他”（少见诊断都落在这里）。
+  # 一条诊断只要有一个词命中，其余没命中的词不会进“其他”；这些词列在统计报告的“未被任何关键词覆盖的诊断词”里。
   other: dx_other
-  # 报告和文档里用的中文名
+  # 大类：每个大类是若干细类的“或”，命中任一细类就记 1。模型和病例库默认用大类（见 model.yaml、db.yaml），
+  # 细类保留在统计报告里，用来核对关键词。没归进任何大类的细类（原发、继发、高龄）仍可单独使用。
+  groups:
+    dxg_ovulation:     [dx_pcos, dx_ovulation]
+    dxg_dor:           [dx_dor]
+    dxg_tubal:         [dx_tubal]
+    dxg_uterine:       [dx_uterine, dx_endometrium, dx_cervical]
+    dxg_endometriosis: [dx_endometriosis]
+    dxg_male:          [dx_male, dx_sexual]
+    dxg_genetic:       [dx_genetic]
+    dxg_adverse:       [dx_recurrent_loss, dx_adverse_history, dx_prior_failure]
+    dxg_unexplained:   [dx_unexplained]
+    dxg_other:         [dx_endocrine, dx_immune, dx_infection, dx_nonmedical, dx_other]
+  # 报告和文档里用的中文名（细类和大类）
   names:
+    dxg_ovulation: 排卵障碍（含 PCOS）
+    dxg_dor: 卵巢储备减退
+    dxg_tubal: 输卵管及盆腔因素
+    dxg_uterine: 子宫因素（含内膜、宫颈）
+    dxg_endometriosis: 子宫内膜异位症、腺肌症
+    dxg_male: 男方因素（含性功能及射精障碍）
+    dxg_genetic: 遗传学指征
+    dxg_adverse: 不良妊娠及助孕失败史
+    dxg_unexplained: 不明原因
+    dxg_other: 合并症及其他（内分泌、免疫、传染病等）
     dx_primary: 原发不孕
     dx_secondary: 继发不孕
     dx_genetic: 遗传学指征（染色体异常、地贫、单基因病等）
-    dx_male: 男方因素（精液异常）
+    dx_male: 男方因素（精液、睾丸、精索异常）
+    dx_sexual: 性功能及射精障碍
     dx_recurrent_loss: 复发性流产
     dx_adverse_history: 不良孕产史
     dx_tubal: 输卵管及盆腔因素
-    dx_uterine: 子宫因素（瘢痕子宫、肌瘤、宫腔粘连等）
+    dx_uterine: 子宫因素（瘢痕子宫、肌瘤、宫腔粘连、畸形等）
+    dx_endometrium: 子宫内膜因素（薄型内膜、内膜炎）
+    dx_cervical: 宫颈因素
     dx_endometriosis: 子宫内膜异位症、腺肌症
     dx_pcos: 多囊卵巢综合征
     dx_dor: 卵巢储备功能减退
     dx_ovulation: 排卵障碍
+    dx_endocrine: 内分泌及代谢（高泌乳素、甲状腺、糖代谢、超重等）
+    dx_immune: 免疫及凝血因素
+    dx_infection: 传染病（乙肝、丙肝、HIV、梅毒）
     dx_advanced_age: 高龄
-    dx_prior_failure: 反复种植失败
+    dx_prior_failure: 反复助孕失败（种植、移植、人工授精）
     dx_unexplained: 不明原因不孕
+    dx_nonmedical: 非疾病指征（生育力保存、供精、供卵）
     dx_other: 其他
 
 # 划分。没有患者编号，只能按周期划分（同一患者的多个周期可能落在不同集合，见报告中的提示）。
@@ -117,6 +162,8 @@ split:
 report:
   min_count: 10          # 统计报告中，少于这个次数的取值不单独列出
   top_tokens: 80         # 列出多少个诊断高频词
+  top_uncovered: 80      # 列出多少个没被任何关键词覆盖的诊断词（只列出现次数 ≥ uncovered_min_count 的）
+  uncovered_min_count: 3
   # 数据自检：这些字段对在临床上必然相关。如果它们之间相关、却都和获卵数无关，说明获卵数这一列和其他列没有对齐。
   sanity_pairs:
     - [weight_kg, bmi]

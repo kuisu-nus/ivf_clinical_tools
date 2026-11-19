@@ -1,2 +1,5 @@
 pandas>=2.0
 pyyaml>=6.0
+pymysql>=1.0        # MySQL 病例库
+python-docx>=1.0    # 只有生成 Word 文档需要
+matplotlib>=3.7     # 只有生成 Word 文档需要

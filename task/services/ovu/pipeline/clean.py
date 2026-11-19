@@ -23,7 +23,7 @@ import pandas as pd
 import yaml
 
 OTHER = "其他"
-STAGES = ("baseline", "plan", "during")
+GROUPS = ("clinical", "medication")      # which table of the population report a field goes to
 ENCODINGS = ("utf-8-sig", "gb18030", "utf-16")
 
 
@@ -31,8 +31,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
     config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     fields = {**config.get("columns", {}), **config.get("split_columns", {})}
     for name, spec in fields.items():
-        if spec.get("stage") not in STAGES:
-            raise ValueError(f"{name}: stage 必须是 {STAGES} 之一")
+        if spec.get("group", "clinical") not in GROUPS:
+            raise ValueError(f"{name}: group 必须是 {GROUPS} 之一")
     for name, spec in config.get("columns", {}).items():
         if spec.get("type") not in ("int", "float", "category"):
             raise ValueError(f"{name}: type 必须是 int、float 或 category")
@@ -63,20 +63,29 @@ def bin_index(values: pd.Series, bins: list[int]) -> pd.Series:
     return pd.Series(np.searchsorted(np.asarray(bins), values.to_numpy(), side="left"), index=values.index)
 
 
-def feature_stages(config: dict[str, Any]) -> dict[str, str]:
-    """Every model-usable field -> its stage (diagnosis flags included)."""
-    stages = {name: spec["stage"] for name, spec in config.get("columns", {}).items()}
-    stages.update({name: spec["stage"] for name, spec in config.get("split_columns", {}).items()})
-    diagnosis = config.get("diagnosis")
-    if diagnosis:
-        stages.update({flag: diagnosis.get("stage", "baseline") for flag in diagnosis_flags(config)})
-    return stages
+def available_fields(config: dict[str, Any]) -> list[str]:
+    """Every field the data config loads (diagnosis flags included). Tools may use only these;
+    which of them a tool actually uses is decided by that tool's own config."""
+    fields = list(config.get("columns", {})) + list(config.get("split_columns", {}))
+    if config.get("diagnosis"):
+        fields += diagnosis_flags(config)
+    return fields
 
 
 def diagnosis_flags(config: dict[str, Any]) -> list[str]:
-    """The diagnosis categories, with the catch-all "other" category last when one is configured."""
+    """The diagnosis categories: the detailed ones (the catch-all "other" last), then the groups."""
     diagnosis = config.get("diagnosis") or {}
-    return list(diagnosis.get("flags", {})) + ([diagnosis["other"]] if diagnosis.get("other") else [])
+    return (list(diagnosis.get("flags", {})) + ([diagnosis["other"]] if diagnosis.get("other") else [])
+            + list(diagnosis.get("groups") or {}))
+
+
+def diagnosis_groups(config: dict[str, Any]) -> dict[str, list[str]]:
+    return dict((config.get("diagnosis") or {}).get("groups") or {})
+
+
+def grouped_details(config: dict[str, Any]) -> set[str]:
+    """The detailed categories that belong to some group."""
+    return {m for members in diagnosis_groups(config).values() for m in members}
 
 
 def _numeric(text: pd.Series, spec: dict[str, Any], log: dict[str, int]) -> pd.Series:
@@ -146,6 +155,11 @@ def clean(raw: pd.DataFrame, config: dict[str, Any]) -> tuple[pd.DataFrame, dict
         unmatched = (out[flags].sum(axis=1) == 0) & (text != "")
         if diagnosis.get("other"):
             out[diagnosis["other"]] = unmatched.astype(int)
+        for group, members in (diagnosis.get("groups") or {}).items():
+            missing = [m for m in members if m not in out.columns]
+            if missing:
+                raise ValueError(f"diagnosis.groups.{group} 里的细类不存在：{missing}")
+            out[group] = out[members].max(axis=1).astype(int)
         log["diagnosis_unmatched"] = int(unmatched.sum())
         log["diagnosis_empty"] = int((text == "").sum())
 

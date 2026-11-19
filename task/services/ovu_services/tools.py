@@ -3,7 +3,7 @@
   ovu_predict_oocytes   probability of each oocyte-count group, expected count, each input's effect
   ovu_similar_cases     the most similar training cycles and how their oocyte counts are distributed
   ovu_case_sql          one read-only SELECT on the training-case database
-  ovu_data_overview     what the database holds (columns, meaning, stage, missing rate, distributions)
+  ovu_data_overview     what the database holds (columns, meaning, missing rate, distributions)
   ovu_sql_examples      ready-to-run example queries
 
 Nothing about the fields is written here: the request schema of the first two tools is built from
@@ -15,6 +15,8 @@ Environment:
                   train.csv, model/model.json (+ model_fold<k>.json), similar/similar.json, db/db.json
   OVU_HIDE_FOLD   fold of the training case an agent is being trained on: the predictor uses the
                   model trained without it, retrieval and the database leave its cases out
+  OVU_DB_BACKEND  mysql (default when db.json says so) or sqlite (train.csv in memory, no server)
+  OVU_MYSQL_*     MySQL connection; see ovu/db/mysql.py (the tools use the read-only account)
 """
 
 from __future__ import annotations
@@ -128,26 +130,31 @@ def _similar_tool() -> SimpleNamespace:
 
 # --- case database ------------------------------------------------------------------------------
 def _load_db() -> CaseDatabase:
-    return CaseDatabase(_json("db", "db.json"), _rows(), hide_fold=hide_fold())
+    """MySQL when db.json says so (the default); OVU_DB_BACKEND=sqlite answers from train.csv in memory instead."""
+    spec = _json("db", "db.json")
+    if (os.environ.get("OVU_DB_BACKEND") or spec.get("backend", "sqlite")) == "mysql":
+        return CaseDatabase.connect(spec, hide_fold=hide_fold())
+    return CaseDatabase(spec, _rows(), hide_fold=hide_fold())
 
 
 def _db_tools() -> list[SimpleNamespace]:
     spec = _json("db", "db.json")
     table = spec["table"]
+    dialect = "MySQL" if (os.environ.get("OVU_DB_BACKEND") or spec.get("backend", "sqlite")) == "mysql" else "SQLite"
     common = dict(STATE="case_db", CLIENT_ERROR="invalid_sql", load=_load_db,
                   health=lambda db: {"cases": db.n, "scope": db.scope, "columns": len(db.spec["columns"])})
     return [
         SimpleNamespace(
             TOOL="ovu_case_sql", REQUEST_MODEL=SqlRequest,
             TOOL_DESCRIPTION=(
-                f"在历史促排周期的病例库上执行一条只读 SQL（SQLite 语法，只允许 SELECT）。表 {table}：每行一个周期，"
+                f"在历史促排周期的病例库上执行一条只读 SQL（{dialect} 语法，只允许一条 SELECT）。表 {table}：每行一个周期，"
                 f"没有任何编号，缺失为 NULL；结局列是 {spec['label']}（获卵数）和 {spec['label']}_group（分组）。"
                 f"最多返回 {spec['max_rows']} 行，超过 {spec['timeout_seconds']:g} 秒中止，尽量用 COUNT、AVG、GROUP BY 等聚合。"
                 "不知道有哪些列时先调用 ovu_data_overview；需要写法参考时调用 ovu_sql_examples。"),
             call=lambda db, req: db.sql(req.sql), summary=lambda resp: f"rows={resp['返回行数']}", **common),
         SimpleNamespace(
             TOOL="ovu_data_overview", REQUEST_MODEL=NoArguments,
-            TOOL_DESCRIPTION="病例库的数据概览：病例数、获卵数分组占比，以及每一列的列名、含义、类型、预测时点、缺失率和分布。不需要参数。",
+            TOOL_DESCRIPTION="病例库的数据概览：病例数、获卵数分组占比，以及每一列的列名、含义、类型、缺失率和分布。不需要参数。",
             call=lambda db, req: db.overview(), summary=lambda resp: f"columns={len(resp['列'])}", **common),
         SimpleNamespace(
             TOOL="ovu_sql_examples", REQUEST_MODEL=NoArguments,
