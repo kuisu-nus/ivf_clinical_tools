@@ -15,10 +15,11 @@ task/services/ovu/
   db/               病例库：database.py（SQLite，当前默认）  mysql.py（MySQL）  build.py 建库
   report/           population.py 人群统计 Word  model.py 模型性能与可解释分析 Word
 task/services/ovu_services/   HTTP 工具服务（预测、相似病例、SQL）和 MCP 工具规格
-tests/test_ovu_*.py           53 个测试，全部用模拟数据
+ovu/mcp.example.json          MCP 配置示例（经 task/runtime/claw_tools_mcp.py 走 MCP 协议）
+tests/test_ovu_*.py           57 个测试，全部用模拟数据
 ```
 
-流程：原始 csv → `pipeline`（清洗、统计、划分）→ `ml` / `similar` / `db` 各自从训练集构建 → `ovu_services` 把三者包成 agent 可调用的工具 → `report` 只读汇总 JSON 出 Word 文档。所有字段、类别和参数都在 `config/` 里，代码里不写死。
+流程：原始 csv → `pipeline`（清洗、统计、划分）→ `ml` / `similar` / `db` 各自从训练集构建 → `ovu_services` 把三者包成 HTTP 工具，再经 MCP 交给 agent → `report` 只读汇总 JSON 出 Word 文档。所有字段、类别和参数都在 `config/` 里，代码里不写死。
 
 ## 数据清洗、统计与划分
 
@@ -175,6 +176,34 @@ OVU_DATA_DIR=outputs/ovu PYTHONPATH=task/services python -m ovu_services.specs -
 
 前两个工具接收哪些参数、参数的范围和说明，都来自模型文件和检索配置（也就是 yaml）；改了配置并重新构建后，重启服务、重新生成规格即可，不用改服务代码。`OVU_HIDE_FOLD=<折号>` 用于训练 agent：预测用没见过该折的模型，检索和病例库去掉该折的病例。
 
+### 通过 MCP 调用
+
+agent 不直接调 HTTP，而是走 MCP 协议，和妊娠工具一样用仓库里现成的 MCP 服务器 `task/runtime/claw_tools_mcp.py`（stdio，不依赖第三方包）：
+
+```
+agent（OpenClaw 等 MCP 客户端） ──MCP stdio──▶ claw_tools_mcp.py ──HTTP──▶ ovu_services（:9211）
+                                      读 task/ovu_tools/*.json      每次调用记一行 dispatches.jsonl
+```
+
+它从 `OMNI_TOOL_SPECS_DIR` 读工具规格，`tools/list` 列出 5 个工具，`tools/call` 按规格里的 `backend.url` 转发到 HTTP 服务；参数不合法、SQL 被拒时返回 `isError: true` 和原因。妊娠工具是 `claw-tools`（读 `task/tools/`），OVU 单独注册成 `ovu-tools`（读 `task/ovu_tools/`），两者互不影响。
+
+```bash
+cd /home/wangzhiyuan/ivf_clinical_tools
+OVU_DATA_DIR=outputs/ovu PYTHONPATH=task/services python -m ovu_services.specs --tools task/ovu_tools          # 1. 生成规格
+OVU_DATA_DIR=outputs/ovu PYTHONPATH=task/services python task/services/ovu_services/server.py &                # 2. 启动 HTTP 服务
+OMNI_MCP_SERVER_NAME=ovu-tools OMNI_TOOL_SPECS_DIR=task/ovu_tools python task/runtime/claw_tools_mcp.py --list-tools   # 3. 检查：列出工具
+OMNI_MCP_SERVER_NAME=ovu-tools OMNI_TOOL_SPECS_DIR=task/ovu_tools OMNI_TRACE_DIR=outputs/ovu_tool_trace \
+  python task/runtime/claw_tools_mcp.py --call-tool ovu_predict_oocytes --arguments '{"age": 38, "amh": 0.9}'  #    检查：调一次
+```
+
+在 MCP 客户端里注册：Claude Desktop、MCP Inspector 等按 `ovu/mcp.example.json` 配置（把 `<仓库绝对路径>` 换掉）；OpenClaw 用
+
+```bash
+openclaw mcp set ovu-tools '{"command": "python3", "args": ["/home/wangzhiyuan/ivf_clinical_tools/task/runtime/claw_tools_mcp.py"], "env": {"OMNI_MCP_SERVER_NAME": "ovu-tools", "OMNI_TOOL_SPECS_DIR": "/home/wangzhiyuan/ivf_clinical_tools/task/ovu_tools", "OMNI_TRACE_DIR": "/home/wangzhiyuan/ivf_clinical_tools/outputs/ovu_tool_trace", "NO_PROXY": "127.0.0.1,localhost"}}'
+```
+
+agent 看到的工具名带服务器前缀，如 `ovu-tools__ovu_predict_oocytes`。HTTP 服务不在 9211 时设 `OMNI_TOOL_PORT_MAP=9211:<端口>`。调用记录 `dispatches.jsonl` 含病例参数，放在 `outputs/` 下，不提交。`tests/test_ovu_mcp.py` 用同样的 stdio 消息测 initialize、tools/list、tools/call 和出错返回。
+
 ## 人群统计 Word 文档（`ovu/report`）
 
 ```bash
@@ -196,4 +225,4 @@ python -m ovu.ml.evaluate_test --data outputs/ovu        # 最终评估（只跑
 python -m ovu.report.model --model-dir outputs/ovu/model # 模型性能与可解释分析 Word 文档
 ```
 
-测试：`python -m unittest tests.test_ovu_pipeline tests.test_ovu_ml tests.test_ovu_similar tests.test_ovu_db tests.test_ovu_services tests.test_ovu_report`（用模拟数据，不需要真实数据）。MySQL 部分另有测试，设置 `OVU_TEST_MYSQL_ADMIN_USER`、`OVU_TEST_MYSQL_ADMIN_PASSWORD` 后才运行，会在服务器上建 `ovu_test*` 库和账号。
+测试：`python -m unittest tests.test_ovu_pipeline tests.test_ovu_ml tests.test_ovu_similar tests.test_ovu_db tests.test_ovu_services tests.test_ovu_mcp tests.test_ovu_report`（用模拟数据，不需要真实数据）。MySQL 部分另有测试，设置 `OVU_TEST_MYSQL_ADMIN_USER`、`OVU_TEST_MYSQL_ADMIN_PASSWORD` 后才运行，会在服务器上建 `ovu_test*` 库和账号。

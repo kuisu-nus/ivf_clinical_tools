@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "ovu-tools": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["<仓库绝对路径>/task/runtime/claw_tools_mcp.py"],
+      "env": {
+        "OMNI_MCP_SERVER_NAME": "ovu-tools",
+        "OMNI_TOOL_SPECS_DIR": "<仓库绝对路径>/task/ovu_tools",
+        "OMNI_TRACE_DIR": "<仓库绝对路径>/outputs/ovu_tool_trace",
+        "NO_PROXY": "127.0.0.1,localhost"
+      }
+    }
+  }
+}

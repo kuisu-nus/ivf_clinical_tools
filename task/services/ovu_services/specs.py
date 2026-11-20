@@ -3,6 +3,8 @@
   OVU_DATA_DIR=outputs/ovu PYTHONPATH=task/services python -m ovu_services.specs --tools task/ovu_tools
 
 The schemas follow the model file and the retrieval spec, so run this again after a rebuild.
+The MCP server task/runtime/claw_tools_mcp.py serves these files (OMNI_TOOL_SPECS_DIR=task/ovu_tools)
+and forwards each call to the backend URL; see ovu/README.md, 通过 MCP 调用.
 """
 
 from __future__ import annotations
